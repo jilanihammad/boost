@@ -11,22 +11,27 @@ export function RequireRole({
   allow: AppRole[];
   children: React.ReactNode;
 }) {
-  const { loading, user, role } = useAuth();
+  // Use effectiveRole to support impersonation (viewAs)
+  const { loading, user, effectiveRole } = useAuth();
   const router = useRouter();
 
   useEffect(() => {
     if (loading) return;
     if (!user) return;
-    if (!role) return;
-    if (!allow.includes(role)) {
-      // Placeholder redirect policy.
-      router.replace("/dashboard");
+    if (!effectiveRole) return;
+    if (!allow.includes(effectiveRole)) {
+      // Redirect based on effective role
+      if (effectiveRole === "owner") {
+        router.replace("/admin");
+      } else {
+        router.replace("/dashboard");
+      }
     }
-  }, [loading, user, role, allow, router]);
+  }, [loading, user, effectiveRole, allow, router]);
 
-  if (loading) return <div className="p-6">Loading…</div>;
+  if (loading) return <div className="p-6">Loading...</div>;
   if (!user) return null;
-  if (!role) return <div className="p-6">Loading role…</div>;
-  if (!allow.includes(role)) return <div className="p-6">Redirecting…</div>;
+  if (!effectiveRole) return <div className="p-6">Loading role...</div>;
+  if (!allow.includes(effectiveRole)) return <div className="p-6">Redirecting...</div>;
   return <>{children}</>;
 }
