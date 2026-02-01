@@ -448,6 +448,14 @@ export default function DashboardPage() {
           </div>
 
           <div className="flex items-center gap-2">
+            {(role === "owner" || role === "merchant_admin") && (
+              <Button variant="outline" size="sm" asChild className="h-8 gap-1.5 text-xs">
+                <Link href="/admin">
+                  <Settings className="h-4 w-4" />
+                  <span className="hidden sm:inline">Admin</span>
+                </Link>
+              </Button>
+            )}
             <Button
               variant="ghost"
               size="sm"
