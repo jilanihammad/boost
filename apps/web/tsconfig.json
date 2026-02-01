@@ -30,5 +30,6 @@
     ".next/dev/types/**/*.ts",
     "**/*.mts"
   ],
-  "exclude": ["node_modules"]
+  "exclude": ["node_modules", "V0-ui", "GreenLens", "tools", "**/*.test.ts", "**/*.spec.ts"]
 }
+

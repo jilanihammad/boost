@@ -3,27 +3,43 @@
 import {
   GoogleAuthProvider,
   User,
+  getRedirectResult,
   isSignInWithEmailLink,
   onAuthStateChanged,
   sendSignInLinkToEmail,
   signInWithEmailLink,
   signInWithPopup,
+  signInWithRedirect,
   signOut as fbSignOut,
 } from "firebase/auth";
-import React, { createContext, useContext, useEffect, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useState } from "react";
 import { getFirebaseAuth } from "@/lib/firebase";
 
-export type AppRole = "consumer" | "merchant" | "admin";
+export type AppRole = "owner" | "merchant_admin" | "staff";
+
+// View modes for impersonation (UI only - doesn't affect API permissions)
+export type ViewMode = "merchant_admin" | "staff" | null;
 
 type AuthState = {
   loading: boolean;
   user: User | null;
   role: AppRole | null;
+  merchantId: string | null;
   idToken: string | null;
+
+  // Impersonation (UI only)
+  viewAs: ViewMode;
+  setViewAs: (view: ViewMode) => void;
+  effectiveRole: AppRole | null; // role with viewAs applied
+
+  // Auth methods
   signInWithGoogle: () => Promise<void>;
   sendEmailLink: (email: string) => Promise<void>;
   tryCompleteEmailLinkSignIn: () => Promise<void>;
   signOut: () => Promise<void>;
+
+  // Token refresh (after claiming role)
+  refreshToken: () => Promise<void>;
 };
 
 const Ctx = createContext<AuthState | undefined>(undefined);
@@ -46,7 +62,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [user, setUser] = useState<User | null>(null);
   const [role, setRole] = useState<AppRole | null>(null);
+  const [merchantId, setMerchantId] = useState<string | null>(null);
   const [idToken, setIdToken] = useState<string | null>(null);
+  const [viewAs, setViewAs] = useState<ViewMode>(null);
 
   useEffect(() => {
     // Avoid initializing Firebase during SSR / build-time prerender.
@@ -56,66 +74,142 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (!authInstance) return;
+
+    // If mobile Google sign-in used redirect flow, this resolves it.
+    // It's safe to call even if there is no pending redirect result.
+    getRedirectResult(authInstance).catch(() => {
+      // ignore
+    });
+
     const unsub = onAuthStateChanged(authInstance, async (u) => {
       setUser(u);
       if (!u) {
         setRole(null);
+        setMerchantId(null);
         setIdToken(null);
+        setViewAs(null);
         setLoading(false);
         return;
       }
 
-      // Placeholder role resolution:
-      // In v0, read custom claims `role` (set by backend/admin tooling) if present.
+      // Role resolution: read custom claims
       const tokenResult = await u.getIdTokenResult(true);
       const claimRole = tokenResult.claims.role as AppRole | undefined;
-      setRole(claimRole || "consumer");
+      const claimMerchantId = tokenResult.claims.merchant_id as string | undefined;
+
+      setRole(claimRole || null);
+      setMerchantId(claimMerchantId || null);
       setIdToken(tokenResult.token);
       setLoading(false);
     });
     return () => unsub();
   }, [authInstance]);
 
-  async function signInWithGoogle() {
-    if (!authInstance) throw new Error("Auth not initialized yet");
-    await signInWithPopup(authInstance, new GoogleAuthProvider());
-  }
+  // Compute effective role based on viewAs (UI impersonation)
+  const effectiveRole = React.useMemo(() => {
+    if (!role) return null;
+    if (!viewAs) return role;
 
-  async function sendEmailLink(email: string) {
+    // Owner can impersonate as merchant_admin or staff
+    if (role === "owner") {
+      return viewAs;
+    }
+
+    // Merchant admin can impersonate as staff only
+    if (role === "merchant_admin" && viewAs === "staff") {
+      return "staff";
+    }
+
+    // Otherwise return actual role
+    return role;
+  }, [role, viewAs]);
+
+  const signInWithGoogle = useCallback(async () => {
+    if (!authInstance) throw new Error("Auth not initialized yet");
+
+    const provider = new GoogleAuthProvider();
+
+    try {
+      await signInWithPopup(authInstance, provider);
+    } catch (err: any) {
+      const code = err?.code;
+      if (code === "auth/popup-closed-by-user") {
+        throw new Error("Sign-in cancelled");
+      } else if (code === "auth/popup-blocked") {
+        throw new Error("Popup was blocked. Please allow popups for this site.");
+      } else if (code === "auth/operation-not-allowed") {
+        throw new Error("Google sign-in is not enabled. Please contact support.");
+      } else {
+        throw new Error(err?.message || "Failed to sign in with Google");
+      }
+    }
+  }, [authInstance]);
+
+  const sendEmailLink = useCallback(async (email: string) => {
     if (!authInstance) throw new Error("Auth not initialized yet");
     await sendSignInLinkToEmail(authInstance, email, getActionCodeSettings());
     window.localStorage.setItem(EMAIL_FOR_SIGNIN_KEY, email);
-  }
+  }, [authInstance]);
 
-  async function tryCompleteEmailLinkSignIn() {
+  const tryCompleteEmailLinkSignIn = useCallback(async () => {
     if (typeof window === "undefined") return;
     if (!authInstance) return;
     if (!isSignInWithEmailLink(authInstance, window.location.href)) return;
 
     const email = window.localStorage.getItem(EMAIL_FOR_SIGNIN_KEY);
     if (!email) {
-      // v0: require user to re-enter email if not present.
-      return;
+      throw new Error("Please enter your email address to complete sign-in");
     }
 
-    await signInWithEmailLink(authInstance, email, window.location.href);
-    window.localStorage.removeItem(EMAIL_FOR_SIGNIN_KEY);
-  }
+    try {
+      await signInWithEmailLink(authInstance, email, window.location.href);
+      window.localStorage.removeItem(EMAIL_FOR_SIGNIN_KEY);
+    } catch (err: any) {
+      window.localStorage.removeItem(EMAIL_FOR_SIGNIN_KEY);
+      const code = err?.code;
+      if (code === "auth/invalid-action-code") {
+        throw new Error("This sign-in link has expired. Please request a new one.");
+      } else if (code === "auth/invalid-email") {
+        throw new Error("Invalid email address");
+      } else {
+        throw new Error(err?.message || "Failed to complete sign-in");
+      }
+    }
+  }, [authInstance]);
 
-  async function signOut() {
+  const signOut = useCallback(async () => {
     if (!authInstance) return;
+    setViewAs(null);
     await fbSignOut(authInstance);
-  }
+  }, [authInstance]);
+
+  const refreshToken = useCallback(async () => {
+    if (!user) return;
+
+    // Force refresh the token to get updated claims
+    const tokenResult = await user.getIdTokenResult(true);
+    const claimRole = tokenResult.claims.role as AppRole | undefined;
+    const claimMerchantId = tokenResult.claims.merchant_id as string | undefined;
+
+    setRole(claimRole || null);
+    setMerchantId(claimMerchantId || null);
+    setIdToken(tokenResult.token);
+  }, [user]);
 
   const value: AuthState = {
     loading,
     user,
     role,
+    merchantId,
     idToken,
+    viewAs,
+    setViewAs,
+    effectiveRole,
     signInWithGoogle,
     sendEmailLink,
     tryCompleteEmailLinkSignIn,
     signOut,
+    refreshToken,
   };
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

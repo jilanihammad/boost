@@ -1,0 +1,49 @@
+# Cloud Build configuration for Boost API
+# Deploys to Cloud Run
+
+steps:
+  # Build the Docker image
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-t'
+      - 'gcr.io/$PROJECT_ID/boost-api:$COMMIT_SHA'
+      - '-t'
+      - 'gcr.io/$PROJECT_ID/boost-api:latest'
+      - '.'
+
+  # Push to Container Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - 'gcr.io/$PROJECT_ID/boost-api:$COMMIT_SHA'
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - 'gcr.io/$PROJECT_ID/boost-api:latest'
+
+  # Deploy to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'boost-api'
+      - '--image'
+      - 'gcr.io/$PROJECT_ID/boost-api:$COMMIT_SHA'
+      - '--region'
+      - '${_REGION}'
+      - '--platform'
+      - 'managed'
+      - '--allow-unauthenticated'
+      - '--set-env-vars'
+      - 'CORS_ORIGINS=${_CORS_ORIGINS}'
+
+substitutions:
+  _REGION: us-central1
+  _CORS_ORIGINS: 'https://boost-dev-3fabf.web.app'
+
+images:
+  - 'gcr.io/$PROJECT_ID/boost-api:$COMMIT_SHA'
+  - 'gcr.io/$PROJECT_ID/boost-api:latest'
