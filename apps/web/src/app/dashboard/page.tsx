@@ -78,7 +78,7 @@ import {
 } from "recharts"
 
 export default function DashboardPage() {
-  const { user, loading, role, effectiveRole, idToken, signOut, viewAs, setViewAs } = useAuth()
+  const { user, loading, role, effectiveRole, idToken, merchantId, signOut, viewAs, setViewAs } = useAuth()
   const router = useRouter()
 
   // API data state
@@ -87,6 +87,9 @@ export default function DashboardPage() {
   const [ledger, setLedger] = useState<LedgerSummary | null>(null)
   const [dataLoading, setDataLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+
+  // Impersonation state (for owner viewing as merchant)
+  const [impersonatedMerchantId, setImpersonatedMerchantId] = useState<string | null>(null)
 
   // UI state
   const [selectedOffer, setSelectedOffer] = useState<Offer | null>(null)
@@ -101,6 +104,14 @@ export default function DashboardPage() {
     }
   }, [user, loading, router])
 
+  // Read impersonated merchant ID from localStorage on mount (for owner viewing as merchant)
+  useEffect(() => {
+    const saved = localStorage.getItem("boost_impersonate_merchant")
+    if (saved && role === "owner") {
+      setImpersonatedMerchantId(saved)
+    }
+  }, [role])
+
   // Fetch data from API
   useEffect(() => {
     async function fetchData() {
@@ -110,10 +121,13 @@ export default function DashboardPage() {
       setError(null)
 
       try {
+        // Use impersonated merchant ID if set (owner viewing as merchant), otherwise use user's merchantId
+        const merchantIdForApi = impersonatedMerchantId || merchantId || undefined
+
         const [offersRes, redemptionsRes, ledgerRes] = await Promise.all([
-          listOffers(idToken),
-          listRedemptions(idToken, { limit: 50 }),
-          getLedger(idToken),
+          listOffers(idToken, merchantIdForApi),
+          listRedemptions(idToken, { merchantId: merchantIdForApi, limit: 50 }),
+          getLedger(idToken, merchantIdForApi),
         ])
 
         setOffers(offersRes.offers)
@@ -135,7 +149,7 @@ export default function DashboardPage() {
     if (user && idToken) {
       fetchData()
     }
-  }, [user, idToken])
+  }, [user, idToken, impersonatedMerchantId, merchantId])
 
   // Block rendering until auth is confirmed - prevents flash of dashboard content
   if (loading || !user) {
@@ -467,6 +481,22 @@ export default function DashboardPage() {
                 <span className="hidden sm:inline">Redeem</span>
               </Link>
             </Button>
+            {/* Exit Merchant View button for owner impersonating */}
+            {impersonatedMerchantId && role === "owner" && (
+              <Button
+                variant="destructive"
+                size="sm"
+                className="h-8 gap-1.5 text-xs"
+                onClick={() => {
+                  localStorage.removeItem("boost_impersonate_merchant")
+                  setImpersonatedMerchantId(null)
+                  setViewAs(null)
+                }}
+              >
+                <Eye className="h-4 w-4" />
+                <span className="hidden sm:inline">Exit Merchant View</span>
+              </Button>
+            )}
             {/* View as Staff toggle for merchant admins */}
             {isMerchantAdmin && (
               <Button
