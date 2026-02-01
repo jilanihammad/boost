@@ -40,6 +40,7 @@ import {
   createOffer,
   listOffers,
   deleteOffer,
+  updateOffer,
   generateTokens,
   listTokens,
   getTokenQrUrl,
@@ -48,11 +49,19 @@ import {
   deleteUser,
   type Merchant,
   type Offer,
+  type OfferStatus,
   type Token,
   type User,
   type PendingRole,
   type UserRole,
 } from "@/lib/api"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import {
   Building2,
   Tag,
@@ -67,6 +76,7 @@ import {
   Eye,
   Trash2,
   RotateCcw,
+  Pencil,
 } from "lucide-react"
 
 export default function AdminPage() {
@@ -103,6 +113,17 @@ export default function AdminPage() {
     type: "success" | "error"
     text: string
   } | null>(null)
+
+  // Edit offer state
+  const [editingOffer, setEditingOffer] = useState<Offer | null>(null)
+  const [editOfferForm, setEditOfferForm] = useState({
+    name: "",
+    discount_text: "",
+    terms: "",
+    cap_daily: "",
+    value_per_redemption: "",
+    status: "active" as OfferStatus,
+  })
 
   // QR state
   const [selectedOfferForQr, setSelectedOfferForQr] = useState<string>("")
@@ -256,6 +277,47 @@ export default function AdminPage() {
     }
   }
 
+  // Open edit offer dialog
+  const openEditOffer = (offer: Offer) => {
+    setEditOfferForm({
+      name: offer.name,
+      discount_text: offer.discount_text,
+      terms: offer.terms || "",
+      cap_daily: String(offer.cap_daily),
+      value_per_redemption: String(offer.value_per_redemption),
+      status: offer.status,
+    })
+    setEditingOffer(offer)
+  }
+
+  // Update offer
+  const handleUpdateOffer = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!idToken || !editingOffer) return
+
+    setOfferSaving(true)
+    setOfferMessage(null)
+
+    try {
+      const updated = await updateOffer(idToken, editingOffer.id, {
+        name: editOfferForm.name,
+        discount_text: editOfferForm.discount_text,
+        terms: editOfferForm.terms || undefined,
+        cap_daily: parseInt(editOfferForm.cap_daily) || 100,
+        value_per_redemption: parseFloat(editOfferForm.value_per_redemption) || 5,
+        status: editOfferForm.status,
+      })
+
+      setOffers((prev) => prev.map((o) => (o.id === updated.id ? updated : o)))
+      setEditingOffer(null)
+      setOfferMessage({ type: "success", text: `Updated offer: ${updated.name}` })
+    } catch (err: any) {
+      setOfferMessage({ type: "error", text: err.message || "Failed to update offer" })
+    } finally {
+      setOfferSaving(false)
+    }
+  }
+
   // Generate tokens
   const handleGenerateTokens = async () => {
     if (!idToken || !selectedOfferForQr) return
@@ -286,9 +348,17 @@ export default function AdminPage() {
 
   // Download single QR code
   const downloadQrCode = async (token: Token) => {
+    if (!idToken) return
     const url = getTokenQrUrl(token.id)
     try {
-      const response = await fetch(url)
+      const response = await fetch(url, {
+        headers: {
+          Authorization: `Bearer ${idToken}`,
+        },
+      })
+      if (!response.ok) {
+        throw new Error(`Failed to fetch QR: ${response.status}`)
+      }
       const blob = await response.blob()
       const downloadUrl = window.URL.createObjectURL(blob)
       const a = document.createElement("a")
@@ -300,6 +370,7 @@ export default function AdminPage() {
       window.URL.revokeObjectURL(downloadUrl)
     } catch (err) {
       console.error("Failed to download QR:", err)
+      setQrMessage({ type: "error", text: "Failed to download QR code" })
     }
   }
 
@@ -810,6 +881,14 @@ export default function AdminPage() {
                                       <Button
                                         variant="ghost"
                                         size="sm"
+                                        onClick={() => openEditOffer(o)}
+                                        title="Edit offer"
+                                      >
+                                        <Pencil className="h-4 w-4" />
+                                      </Button>
+                                      <Button
+                                        variant="ghost"
+                                        size="sm"
                                         onClick={() => setSelectedOfferForQr(o.id)}
                                         title="View QR code"
                                       >
@@ -1259,6 +1338,113 @@ export default function AdminPage() {
                 </div>
               </TabsContent>
             </Tabs>
+
+            {/* Edit Offer Dialog */}
+            <Dialog open={!!editingOffer} onOpenChange={(open) => !open && setEditingOffer(null)}>
+              <DialogContent className="sm:max-w-md">
+                <DialogHeader>
+                  <DialogTitle>Edit Offer</DialogTitle>
+                  <DialogDescription>
+                    Update the offer details below.
+                  </DialogDescription>
+                </DialogHeader>
+                <form onSubmit={handleUpdateOffer} className="space-y-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="edit-offer-name">Offer Name</Label>
+                    <Input
+                      id="edit-offer-name"
+                      value={editOfferForm.name}
+                      onChange={(e) =>
+                        setEditOfferForm((f) => ({ ...f, name: e.target.value }))
+                      }
+                      required
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="edit-offer-discount">Discount Text</Label>
+                    <Input
+                      id="edit-offer-discount"
+                      value={editOfferForm.discount_text}
+                      onChange={(e) =>
+                        setEditOfferForm((f) => ({ ...f, discount_text: e.target.value }))
+                      }
+                      required
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="edit-offer-terms">Terms (optional)</Label>
+                    <Textarea
+                      id="edit-offer-terms"
+                      value={editOfferForm.terms}
+                      onChange={(e) =>
+                        setEditOfferForm((f) => ({ ...f, terms: e.target.value }))
+                      }
+                      rows={2}
+                    />
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="edit-offer-cap">Daily Cap</Label>
+                      <Input
+                        id="edit-offer-cap"
+                        type="number"
+                        min="1"
+                        value={editOfferForm.cap_daily}
+                        onChange={(e) =>
+                          setEditOfferForm((f) => ({ ...f, cap_daily: e.target.value }))
+                        }
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="edit-offer-value">Value ($)</Label>
+                      <Input
+                        id="edit-offer-value"
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={editOfferForm.value_per_redemption}
+                        onChange={(e) =>
+                          setEditOfferForm((f) => ({
+                            ...f,
+                            value_per_redemption: e.target.value,
+                          }))
+                        }
+                      />
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="edit-offer-status">Status</Label>
+                    <Select
+                      value={editOfferForm.status}
+                      onValueChange={(v) =>
+                        setEditOfferForm((f) => ({ ...f, status: v as OfferStatus }))
+                      }
+                    >
+                      <SelectTrigger id="edit-offer-status">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="active">Active</SelectItem>
+                        <SelectItem value="paused">Paused</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="flex justify-end gap-2 pt-4">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => setEditingOffer(null)}
+                    >
+                      Cancel
+                    </Button>
+                    <Button type="submit" disabled={offerSaving}>
+                      {offerSaving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                      Save Changes
+                    </Button>
+                  </div>
+                </form>
+              </DialogContent>
+            </Dialog>
           </div>
         </div>
       </RequireRole>
