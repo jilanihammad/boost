@@ -72,6 +72,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setAuthInstance(getFirebaseAuth());
   }, []);
 
+  // Read impersonation state from localStorage ONLY after user is authenticated with a role
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    // Only restore viewAs if user is authenticated and has owner role
+    if (user && role === "owner") {
+      const savedViewAs = localStorage.getItem("boost_view_as") as ViewMode;
+      if (savedViewAs) setViewAs(savedViewAs);
+    }
+  }, [user, role]);
+
+  // Sync viewAs to localStorage when it changes (only if we have a user)
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!user) return; // Don't sync if not logged in
+    if (viewAs) {
+      localStorage.setItem("boost_view_as", viewAs);
+    } else {
+      localStorage.removeItem("boost_view_as");
+    }
+  }, [viewAs, user]);
+
   useEffect(() => {
     if (!authInstance) return;
 
@@ -180,6 +201,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const signOut = useCallback(async () => {
     if (!authInstance) return;
     setViewAs(null);
+    // Clear impersonation state from localStorage
+    localStorage.removeItem("boost_view_as");
+    localStorage.removeItem("boost_impersonate_merchant");
     await fbSignOut(authInstance);
   }, [authInstance]);
 

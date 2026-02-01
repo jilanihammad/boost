@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useState } from "react"
+import { useRouter } from "next/navigation"
 import { RequireAuth } from "@/components/RequireAuth"
 import { RequireRole } from "@/components/RequireRole"
 import { useAuth } from "@/lib/auth"
@@ -70,6 +71,7 @@ import {
 
 export default function AdminPage() {
   const { idToken, setViewAs } = useAuth()
+  const router = useRouter()
 
   // Merchants state
   const [merchants, setMerchants] = useState<Merchant[]>([])
@@ -402,7 +404,7 @@ export default function AdminPage() {
     // Store the selected merchant ID in localStorage for the dashboard to use
     localStorage.setItem("boost_impersonate_merchant", merchantId)
     setViewAs("merchant_admin")
-    window.location.href = "/dashboard"
+    router.push("/dashboard")
   }
 
   const selectedOffer = offers.find((o) => o.id === selectedOfferForQr)
