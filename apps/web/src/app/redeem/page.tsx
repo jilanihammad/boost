@@ -109,53 +109,66 @@ export default function RedeemPage() {
     }
   }
 
-  const handleStartScanner = async () => {
+  const handleStartScanner = () => {
     setScanError(null)
     setResult("scanning")
+    // The actual camera start happens in useEffect below after video element mounts
+  }
+
+  // Start camera when result changes to "scanning" and video element is ready
+  useEffect(() => {
+    if (result !== "scanning") return
 
     // NOTE: iOS Safari requires HTTPS for camera access when not on localhost.
     // If you run this on a phone via LAN IP (http://192.168...), camera may be blocked.
 
-    try {
-      if (!videoRef.current) throw new Error("Camera element not ready")
+    const startCamera = async () => {
+      // Wait a tick for video element to mount
+      await new Promise((resolve) => setTimeout(resolve, 100))
 
-      // Clean any previous session
-      stopScanRef.current?.()
-      stopScanRef.current = null
+      try {
+        if (!videoRef.current) throw new Error("Camera element not ready")
 
-      const reader = new BrowserQRCodeReader()
-      qrReaderRef.current = reader
+        // Clean any previous session
+        stopScanRef.current?.()
+        stopScanRef.current = null
 
-      const controls = await reader.decodeFromVideoDevice(
-        undefined,
-        videoRef.current,
-        async (qrResult, err) => {
-          if (qrResult) {
-            stopScanRef.current?.()
-            // Extract token from QR data (format: https://boost.app/r/{token_id})
-            const qrText = qrResult.getText()
-            const tokenMatch = qrText.match(/\/r\/([^/?]+)/)
-            const tokenCode = tokenMatch ? tokenMatch[1] : qrText
-            await processRedemption(tokenCode, "scan")
+        const reader = new BrowserQRCodeReader()
+        qrReaderRef.current = reader
+
+        const controls = await reader.decodeFromVideoDevice(
+          undefined,
+          videoRef.current,
+          async (qrResult, err) => {
+            if (qrResult) {
+              stopScanRef.current?.()
+              // Extract token from QR data (format: https://boost.app/r/{token_id})
+              const qrText = qrResult.getText()
+              const tokenMatch = qrText.match(/\/r\/([^/?]+)/)
+              const tokenCode = tokenMatch ? tokenMatch[1] : qrText
+              await processRedemption(tokenCode, "scan")
+            }
+
+            // Ignore decode errors (they happen constantly while scanning)
+            void err
+          },
+        )
+
+        stopScanRef.current = () => {
+          try {
+            controls.stop()
+          } catch {
+            // ignore
           }
-
-          // Ignore decode errors (they happen constantly while scanning)
-          void err
-        },
-      )
-
-      stopScanRef.current = () => {
-        try {
-          controls.stop()
-        } catch {
-          // ignore
         }
+      } catch (e: any) {
+        setScanError(e?.message || "Unable to start camera")
+        setResult("idle")
       }
-    } catch (e: any) {
-      setScanError(e?.message || "Unable to start camera")
-      setResult("idle")
     }
-  }
+
+    startCamera()
+  }, [result])
 
   const handleManualRedeem = async () => {
     if (manualCode.length < 4) return
