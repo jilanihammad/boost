@@ -35,8 +35,8 @@ import {
   CheckCircle2,
   XCircle,
   AlertTriangle,
-  LayoutDashboard,
   LogOut,
+  ArrowLeft,
 } from "lucide-react"
 import { BrowserQRCodeReader } from "@zxing/browser"
 
@@ -194,7 +194,17 @@ export default function RedeemPage() {
       {/* Header */}
       <header className="flex items-center justify-between border-b border-border px-4 py-3">
         <div className="flex items-center gap-4">
-          <BoostLogo />
+          <Button
+            variant="ghost"
+            size="icon"
+            asChild
+            className="h-8 w-8"
+          >
+            <Link href="/dashboard">
+              <ArrowLeft className="h-5 w-5" />
+              <span className="sr-only">Back to dashboard</span>
+            </Link>
+          </Button>
           <Select value={location} onValueChange={setLocation}>
             <SelectTrigger className="h-8 w-[140px] border-border bg-secondary text-xs text-secondary-foreground">
               <SelectValue />
@@ -210,19 +220,6 @@ export default function RedeemPage() {
         </div>
 
         <div className="flex items-center gap-2">
-          {canViewDashboard && (
-            <Button
-              variant="ghost"
-              size="sm"
-              asChild
-              className="h-8 gap-1.5 text-xs text-muted-foreground hover:text-foreground"
-            >
-              <Link href="/dashboard">
-                <LayoutDashboard className="h-4 w-4" />
-                <span className="hidden sm:inline">Dashboard</span>
-              </Link>
-            </Button>
-          )}
           <RoleToggle />
           <Button
             variant="ghost"

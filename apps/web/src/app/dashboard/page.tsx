@@ -64,6 +64,7 @@ import {
   ChevronUp,
   ChevronDown,
   Eye,
+  Crown,
 } from "lucide-react"
 import {
   Bar,
@@ -232,7 +233,7 @@ export default function DashboardPage() {
             {(role === "owner" || role === "merchant_admin") && (
               <Button variant="outline" size="sm" asChild className="h-8 gap-1.5 text-xs">
                 <Link href="/admin">
-                  <Settings className="h-4 w-4" />
+                  <Crown className="h-4 w-4" />
                   <span className="hidden sm:inline">Admin</span>
                 </Link>
               </Button>
@@ -451,7 +452,7 @@ export default function DashboardPage() {
             {(role === "owner" || role === "merchant_admin") && (
               <Button variant="outline" size="sm" asChild className="h-8 gap-1.5 text-xs">
                 <Link href="/admin">
-                  <Settings className="h-4 w-4" />
+                  <Crown className="h-4 w-4" />
                   <span className="hidden sm:inline">Admin</span>
                 </Link>
               </Button>
