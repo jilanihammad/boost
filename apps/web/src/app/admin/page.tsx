@@ -38,6 +38,7 @@ import {
   restoreMerchant,
   createOffer,
   listOffers,
+  deleteOffer,
   generateTokens,
   listTokens,
   getTokenQrUrl,
@@ -236,6 +237,20 @@ export default function AdminPage() {
       setOfferMessage({ type: "error", text: err.message || "Failed to create offer" })
     } finally {
       setOfferSaving(false)
+    }
+  }
+
+  // Delete offer
+  const handleDeleteOffer = async (offerId: string) => {
+    if (!idToken) return
+    if (!confirm("Are you sure you want to delete this offer?")) return
+
+    try {
+      await deleteOffer(idToken, offerId)
+      setOffers((prev) => prev.filter((o) => o.id !== offerId))
+      setOfferMessage({ type: "success", text: "Offer deleted" })
+    } catch (err: any) {
+      setOfferMessage({ type: "error", text: err.message || "Failed to delete offer" })
     }
   }
 
@@ -759,6 +774,7 @@ export default function AdminPage() {
                                 <TableHead>Name</TableHead>
                                 <TableHead>Discount</TableHead>
                                 <TableHead>Status</TableHead>
+                                <TableHead className="text-right">Actions</TableHead>
                               </TableRow>
                             </TableHeader>
                             <TableBody>
@@ -780,6 +796,17 @@ export default function AdminPage() {
                                     >
                                       {o.status}
                                     </span>
+                                  </TableCell>
+                                  <TableCell className="text-right">
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      onClick={() => handleDeleteOffer(o.id)}
+                                      title="Delete offer"
+                                      className="text-destructive hover:text-destructive"
+                                    >
+                                      <Trash2 className="h-4 w-4" />
+                                    </Button>
                                   </TableCell>
                                 </TableRow>
                               ))}
@@ -841,29 +868,19 @@ export default function AdminPage() {
                             </p>
                           </div>
 
-                          <div className="grid grid-cols-2 gap-4">
-                            <div className="space-y-2">
-                              <Label htmlFor="token-count">Number of Tokens</Label>
-                              <Input
-                                id="token-count"
-                                type="number"
-                                min="1"
-                                max="1000"
-                                value={tokenCount}
-                                onChange={(e) => setTokenCount(e.target.value)}
-                              />
-                            </div>
-                            <div className="space-y-2">
-                              <Label htmlFor="expires-days">Expires In (days)</Label>
-                              <Input
-                                id="expires-days"
-                                type="number"
-                                min="1"
-                                max="365"
-                                value={expiresDays}
-                                onChange={(e) => setExpiresDays(e.target.value)}
-                              />
-                            </div>
+                          <div className="space-y-2">
+                            <Label htmlFor="expires-days">Token Expires In (days)</Label>
+                            <Input
+                              id="expires-days"
+                              type="number"
+                              min="1"
+                              max="365"
+                              value={expiresDays}
+                              onChange={(e) => setExpiresDays(e.target.value)}
+                            />
+                            <p className="text-xs text-muted-foreground">
+                              One universal token per offer - can be redeemed unlimited times within daily cap
+                            </p>
                           </div>
 
                           {qrMessage && (
@@ -891,7 +908,7 @@ export default function AdminPage() {
                             {generating && (
                               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                             )}
-                            Generate Tokens
+                            {tokens.length > 0 ? "Update Token Expiry" : "Generate Universal Token"}
                           </Button>
                         </>
                       )}
@@ -903,10 +920,9 @@ export default function AdminPage() {
                     <CardHeader>
                       <div className="flex items-center justify-between">
                         <div>
-                          <CardTitle>Generated Tokens</CardTitle>
+                          <CardTitle>Universal Token</CardTitle>
                           <CardDescription>
-                            {activeTokensCount} active token
-                            {activeTokensCount !== 1 ? "s" : ""} available
+                            {tokens.length > 0 ? "One reusable token for this offer" : "No token generated yet"}
                           </CardDescription>
                         </div>
                         {selectedOfferForQr && (

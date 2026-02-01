@@ -88,12 +88,12 @@ Boost solves a problem for local businesses: traditional advertising charges for
 
 1. **Owner creates a merchant** in the system with business details
 2. **Owner creates an offer** for the merchant (e.g., "$2 off any coffee", 50/day cap)
-3. **Owner generates QR codes** - each code is unique and single-use
-4. **Merchant downloads QR codes** and posts them on social media ads
+3. **Owner generates a universal QR code** - one reusable code per offer (controlled by daily cap)
+4. **Merchant downloads QR code** and posts it on social media ads
 5. **Customer sees ad**, screenshots or saves QR code
 6. **Customer visits store** and shows QR on their phone
 7. **Staff opens /redeem page**, scans QR with camera (or enters code manually)
-8. **System validates**: Is token valid? Not expired? Not already used? Offer still active?
+8. **System validates**: Is token valid? Not expired? Daily cap not exceeded? Offer still active?
 9. **System records redemption** and adds to merchant's ledger
 10. **Merchant sees dashboard** with redemption count and amount owed
 
@@ -356,15 +356,16 @@ firestore/
 │       ├── created_at: timestamp
 │       └── updated_at: timestamp
 │
-├── redemption_tokens/                # QR code tokens
+├── redemption_tokens/                # QR code tokens (universal/reusable)
 │   └── {token_id}/                       # UUID
 │       ├── offer_id: string
 │       ├── short_code: string            # "ABC123" (human-readable)
 │       ├── qr_data: string               # Full URL for QR
-│       ├── status: "active" | "redeemed" | "expired"
+│       ├── status: "active" | "expired"  # Universal tokens stay "active"
 │       ├── expires_at: timestamp
-│       ├── redeemed_at: timestamp | null
-│       ├── redeemed_by_location: string | null
+│       ├── is_universal: boolean         # true = reusable, false = legacy single-use
+│       ├── last_redeemed_at: timestamp | null  # Most recent redemption
+│       ├── last_redeemed_by_location: string | null
 │       └── created_at: timestamp
 │
 ├── redemptions/                      # Verified redemptions
@@ -533,18 +534,21 @@ DELETE /offers/{id}                    # Owner or merchant_admin
 Response: { "deleted": true, "id": "..." }
 ```
 
-### Tokens
+### Tokens (Universal/Reusable)
+
+Boost uses **universal tokens** - one reusable QR code per offer. The token can be redeemed unlimited times, controlled only by the offer's daily cap.
 
 ```
 POST /offers/{offer_id}/tokens         # Owner or merchant_admin
-Body: { "count": 100, "expires_days": 30 }
+Body: { "expires_days": 30 }           # count parameter ignored
 Response: {
   "offer_id": "...",
-  "count": 100,
-  "tokens": [{ "id": "...", "short_code": "ABC123", "qr_data": "..." }, ...]
+  "count": 1,
+  "tokens": [{ "id": "...", "short_code": "ABC123", "qr_data": "...", "is_universal": true }]
 }
+# If a token already exists for the offer, updates its expiry date instead of creating new
 
-GET /offers/{offer_id}/tokens?status=active&limit=100
+GET /offers/{offer_id}/tokens?status=active
 Response: { "offer_id": "...", "tokens": [...] }
 
 GET /tokens/{token_id}/qr              # Owner or merchant_admin
@@ -569,7 +573,7 @@ Response (success): {
 }
 Response (failure): {
   "success": false,
-  "message": "This code has already been redeemed"
+  "message": "Daily cap reached - try again tomorrow"
 }
 
 GET /redemptions?merchant_id=...&offer_id=...&limit=50
@@ -952,8 +956,8 @@ After running the bootstrap script, the user must **sign out and sign back in** 
 - [x] Bootstrap script for primary owner
 - [x] Firestore data models (7 collections)
 - [x] Merchant CRUD API with soft delete/restore
-- [x] Offer CRUD API with pause/resume
-- [x] Token generation with QR codes
+- [x] Offer CRUD API with pause/resume + delete
+- [x] **Universal reusable tokens** (one QR per offer, unlimited redemptions, daily cap enforced)
 - [x] Redemption API with full validation
 - [x] Ledger tracking per merchant
 - [x] User management API (invite, claim, delete)

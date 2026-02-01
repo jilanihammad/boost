@@ -501,8 +501,11 @@ async def redeem_token(data: RedeemRequest, user=Depends(get_current_user)):
 
     token_id, token_data = result
 
-    # Check token status
-    if token_data["status"] == TokenStatus.redeemed.value:
+    # Check if this is a universal (reusable) token
+    is_universal = token_data.get("is_universal", False)
+
+    # Check token status - universal tokens can be reused, so skip "redeemed" check
+    if not is_universal and token_data["status"] == TokenStatus.redeemed.value:
         return RedeemResponse(
             success=False,
             message="This code has already been redeemed",

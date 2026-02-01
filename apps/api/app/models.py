@@ -125,6 +125,9 @@ class Token(BaseModel):
     redeemed_at: Optional[datetime] = None
     redeemed_by_location: Optional[str] = None
     created_at: datetime
+    is_universal: bool = False  # True for reusable tokens (one per offer)
+    last_redeemed_at: Optional[datetime] = None  # Track last use for universal tokens
+    last_redeemed_by_location: Optional[str] = None
 
 
 # --- Redemption ---

@@ -52,16 +52,19 @@ def generate_qr_image(data: str) -> bytes:
     return buffer.getvalue()
 
 
-def create_tokens(offer_id: str, count: int, expires_days: int = 30) -> list[dict]:
-    """Generate multiple tokens for an offer.
+def create_tokens(offer_id: str, count: int = 1, expires_days: int = 30) -> list[dict]:
+    """Generate or update the universal token for an offer.
+
+    Creates a single reusable token per offer. If a token already exists,
+    updates its expiry date instead of creating a new one.
 
     Args:
-        offer_id: The offer these tokens are for
-        count: Number of tokens to generate
-        expires_days: Days until tokens expire
+        offer_id: The offer this token is for
+        count: Ignored (kept for API compatibility) - always creates 1 token
+        expires_days: Days until token expires
 
     Returns:
-        List of created token dictionaries
+        List containing the single universal token
     """
     db = get_db()
 
@@ -73,35 +76,55 @@ def create_tokens(offer_id: str, count: int, expires_days: int = 30) -> list[dic
     now = datetime.now(timezone.utc)
     expires_at = now + timedelta(days=expires_days)
 
-    tokens = []
-    batch = db.batch()
+    # Check if universal token already exists for this offer
+    existing_query = db.collection(TOKENS).where("offer_id", "==", offer_id).limit(1)
+    existing_tokens = list(existing_query.stream())
 
-    for _ in range(count):
-        token_id = generate_token_id()
-        short_code = generate_short_code()
-        qr_data = create_qr_data(token_id)
-
-        token_doc = {
-            "offer_id": offer_id,
-            "short_code": short_code,
-            "qr_data": qr_data,
-            "status": TokenStatus.active.value,
+    if existing_tokens:
+        # Update existing token's expiry
+        existing_doc = existing_tokens[0]
+        existing_doc.reference.update({
             "expires_at": expires_at,
-            "redeemed_at": None,
-            "redeemed_by_location": None,
-            "created_at": now,
-        }
-
-        doc_ref = db.collection(TOKENS).document(token_id)
-        batch.set(doc_ref, token_doc)
-
-        tokens.append({
-            "id": token_id,
-            **token_doc,
+            "status": TokenStatus.active.value,  # Ensure it's active
+            "is_universal": True,
         })
 
-    batch.commit()
-    return tokens
+        token_data = existing_doc.to_dict()
+        token_data["expires_at"] = expires_at
+        token_data["status"] = TokenStatus.active.value
+        token_data["is_universal"] = True
+
+        return [{
+            "id": existing_doc.id,
+            **token_data,
+        }]
+
+    # Create new universal token
+    token_id = generate_token_id()
+    short_code = generate_short_code()
+    qr_data = create_qr_data(token_id)
+
+    token_doc = {
+        "offer_id": offer_id,
+        "short_code": short_code,
+        "qr_data": qr_data,
+        "status": TokenStatus.active.value,
+        "expires_at": expires_at,
+        "redeemed_at": None,
+        "redeemed_by_location": None,
+        "created_at": now,
+        "is_universal": True,
+        "last_redeemed_at": None,
+        "last_redeemed_by_location": None,
+    }
+
+    doc_ref = db.collection(TOKENS).document(token_id)
+    doc_ref.set(token_doc)
+
+    return [{
+        "id": token_id,
+        **token_doc,
+    }]
 
 
 def get_token_by_id_or_code(token_input: str) -> tuple[str, dict] | None:
@@ -131,11 +154,27 @@ def get_token_by_id_or_code(token_input: str) -> tuple[str, dict] | None:
 
 
 def mark_token_redeemed(token_id: str, location: str) -> None:
-    """Mark a token as redeemed."""
+    """Mark a token as redeemed (or track last use for universal tokens)."""
     db = get_db()
     doc_ref = db.collection(TOKENS).document(token_id)
-    doc_ref.update({
-        "status": TokenStatus.redeemed.value,
-        "redeemed_at": datetime.now(timezone.utc),
-        "redeemed_by_location": location,
-    })
+    doc = doc_ref.get()
+
+    if not doc.exists:
+        return
+
+    token_data = doc.to_dict()
+    now = datetime.now(timezone.utc)
+
+    # Universal tokens stay active - only track last redemption
+    if token_data.get("is_universal", False):
+        doc_ref.update({
+            "last_redeemed_at": now,
+            "last_redeemed_by_location": location,
+        })
+    else:
+        # Legacy single-use tokens
+        doc_ref.update({
+            "status": TokenStatus.redeemed.value,
+            "redeemed_at": now,
+            "redeemed_by_location": location,
+        })

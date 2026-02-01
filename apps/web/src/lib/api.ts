@@ -88,6 +88,9 @@ export interface Token {
   redeemed_at?: string;
   redeemed_by_location?: string;
   created_at: string;
+  is_universal?: boolean;
+  last_redeemed_at?: string;
+  last_redeemed_by_location?: string;
 }
 
 export interface Redemption {
