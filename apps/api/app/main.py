@@ -206,8 +206,16 @@ async def create_offer(data: OfferCreate, user=Depends(get_current_user)):
 
     return Offer(
         id=doc_ref.id,
-        **offer_data,
+        merchant_id=data.merchant_id,
+        name=data.name,
+        discount_text=data.discount_text,
+        terms=data.terms,
+        cap_daily=data.cap_daily,
+        active_hours=data.active_hours,
+        value_per_redemption=data.value_per_redemption,
         status=OfferStatus.active,
+        created_at=now,
+        updated_at=now,
         today_redemptions=0,
         cap_remaining=data.cap_daily,
     )
