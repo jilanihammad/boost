@@ -4,7 +4,6 @@ import { useState, useEffect } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { BoostLogo } from "@/components/boost-logo"
-import { RoleToggle } from "@/components/role-toggle"
 import { StatusBadge } from "@/components/status-badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -47,7 +46,7 @@ import {
   LogOut,
   Plus,
   Pause,
-  Edit,
+  Play,
   TrendingUp,
   DollarSign,
   Activity,
@@ -482,7 +481,6 @@ export default function DashboardPage() {
                 </span>
               </Button>
             )}
-            <RoleToggle />
             <Button
               variant="ghost"
               size="icon"
@@ -641,9 +639,13 @@ export default function DashboardPage() {
                 {canManageOffers && (
                   <div className="flex gap-2">
                     <Button
-                      variant="outline"
+                      variant={selectedOffer.status === "paused" ? "default" : "outline"}
                       size="sm"
-                      className="h-8 gap-1.5 border-border bg-transparent text-sm"
+                      className={`h-8 gap-1.5 text-sm ${
+                        selectedOffer.status === "paused"
+                          ? "bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                          : "border-border bg-transparent"
+                      }`}
                       onClick={async () => {
                         if (!idToken) return
                         const newStatus = selectedOffer.status === "active" ? "paused" : "active"
@@ -654,16 +656,17 @@ export default function DashboardPage() {
                         setSelectedOffer(res.offers.find(o => o.id === selectedOffer.id) || null)
                       }}
                     >
-                      <Pause className="h-4 w-4" />
-                      {selectedOffer.status === "active" ? "Pause" : "Resume"}
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="h-8 gap-1.5 border-border bg-transparent text-sm"
-                    >
-                      <Edit className="h-4 w-4" />
-                      Edit
+                      {selectedOffer.status === "paused" ? (
+                        <>
+                          <Play className="h-4 w-4" />
+                          Resume
+                        </>
+                      ) : (
+                        <>
+                          <Pause className="h-4 w-4" />
+                          Pause
+                        </>
+                      )}
                     </Button>
                   </div>
                 )}

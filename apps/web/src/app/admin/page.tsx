@@ -771,6 +771,7 @@ export default function AdminPage() {
                           <Table>
                             <TableHeader>
                               <TableRow>
+                                <TableHead>Merchant</TableHead>
                                 <TableHead>Name</TableHead>
                                 <TableHead>Discount</TableHead>
                                 <TableHead>Status</TableHead>
@@ -778,8 +779,13 @@ export default function AdminPage() {
                               </TableRow>
                             </TableHeader>
                             <TableBody>
-                              {offers.map((o) => (
+                              {offers.map((o) => {
+                                const merchant = merchants.find((m) => m.id === o.merchant_id)
+                                return (
                                 <TableRow key={o.id}>
+                                  <TableCell className="text-muted-foreground">
+                                    {merchant?.name || "Unknown"}
+                                  </TableCell>
                                   <TableCell className="font-medium">{o.name}</TableCell>
                                   <TableCell className="text-muted-foreground">
                                     {o.discount_text}
@@ -798,18 +804,29 @@ export default function AdminPage() {
                                     </span>
                                   </TableCell>
                                   <TableCell className="text-right">
-                                    <Button
-                                      variant="ghost"
-                                      size="sm"
-                                      onClick={() => handleDeleteOffer(o.id)}
-                                      title="Delete offer"
-                                      className="text-destructive hover:text-destructive"
-                                    >
-                                      <Trash2 className="h-4 w-4" />
-                                    </Button>
+                                    <div className="flex items-center justify-end gap-1">
+                                      <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        onClick={() => setSelectedOfferForQr(o.id)}
+                                        title="View QR code"
+                                      >
+                                        <QrCode className="h-4 w-4" />
+                                      </Button>
+                                      <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        onClick={() => handleDeleteOffer(o.id)}
+                                        title="Delete offer"
+                                        className="text-destructive hover:text-destructive"
+                                      >
+                                        <Trash2 className="h-4 w-4" />
+                                      </Button>
+                                    </div>
                                   </TableCell>
                                 </TableRow>
-                              ))}
+                                )
+                              })}
                             </TableBody>
                           </Table>
                         </div>
