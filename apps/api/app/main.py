@@ -4,7 +4,9 @@ import csv
 import io
 import logging
 import os
+import re
 import time
+import zipfile
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -22,6 +24,7 @@ if _sentry_dsn:
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
+from pydantic import BaseModel, Field
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
@@ -60,7 +63,7 @@ from .models import (
     ClaimRoleResponse,
     UserResponse,
 )
-from .tokens import create_tokens, get_token_by_id_or_code, mark_token_redeemed, generate_qr_image
+from .tokens import create_tokens, create_qr_data, get_token_by_id_or_code, mark_token_redeemed, generate_qr_image
 
 load_dotenv()
 
@@ -646,6 +649,183 @@ async def get_token_qr(token_id: str, user=Depends(get_current_user)):
         content=qr_bytes,
         media_type="image/png",
         headers={"Content-Disposition": f"inline; filename={token_id}.png"},
+    )
+
+
+# --- QR Download Helpers ---
+
+
+def _get_offer_with_token_and_merchant(offer_id: str):
+    """Fetch offer, its universal token, and merchant data.
+
+    Returns (offer_data, token_data, token_id, merchant_data) or raises HTTPException.
+    """
+    db = get_db()
+
+    offer_doc = db.collection(OFFERS).document(offer_id).get()
+    if not offer_doc.exists:
+        raise HTTPException(status_code=404, detail="Offer not found")
+    offer_data = offer_doc.to_dict()
+
+    # Get the universal token for this offer
+    token_query = db.collection(TOKENS).where("offer_id", "==", offer_id).limit(1)
+    token_docs = list(token_query.stream())
+    if not token_docs:
+        raise HTTPException(status_code=404, detail="No QR token exists for this offer. Generate tokens first.")
+    token_doc = token_docs[0]
+    token_data = token_doc.to_dict()
+
+    # Get merchant name
+    merchant_doc = db.collection(MERCHANTS).document(offer_data["merchant_id"]).get()
+    merchant_data = merchant_doc.to_dict() if merchant_doc.exists else {"name": "Business"}
+
+    return offer_data, token_data, token_doc.id, merchant_data
+
+
+def _generate_qr_pdf(offer_data: dict, token_data: dict, token_id: str, merchant_data: dict) -> bytes:
+    """Generate a styled PDF with the QR code for an offer.
+
+    Returns PDF as bytes.
+    """
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib.units import inch
+    from reportlab.lib.utils import ImageReader
+    from reportlab.pdfgen import canvas as pdf_canvas
+
+    # Generate QR image bytes
+    qr_data = token_data.get("qr_data") or create_qr_data(token_id)
+    qr_bytes = generate_qr_image(qr_data)
+    qr_image = ImageReader(io.BytesIO(qr_bytes))
+
+    buffer = io.BytesIO()
+    c = pdf_canvas.Canvas(buffer, pagesize=letter)
+    page_width, page_height = letter
+
+    # Title: Merchant name
+    c.setFont("Helvetica-Bold", 24)
+    merchant_name = merchant_data.get("name", "Business")
+    c.drawCentredString(page_width / 2, page_height - 1.2 * inch, merchant_name)
+
+    # Offer name
+    c.setFont("Helvetica-Bold", 18)
+    c.drawCentredString(page_width / 2, page_height - 1.8 * inch, offer_data["name"])
+
+    # Discount text
+    c.setFont("Helvetica", 16)
+    c.drawCentredString(page_width / 2, page_height - 2.3 * inch, offer_data["discount_text"])
+
+    # QR code image (centered, large)
+    qr_size = 3.5 * inch
+    qr_x = (page_width - qr_size) / 2
+    qr_y = page_height / 2 - qr_size / 2 - 0.3 * inch
+    c.drawImage(qr_image, qr_x, qr_y, width=qr_size, height=qr_size)
+
+    # "Scan to redeem" instruction
+    c.setFont("Helvetica-Bold", 14)
+    c.drawCentredString(page_width / 2, qr_y - 0.4 * inch, "Scan to Redeem")
+
+    # Short code
+    short_code = token_data.get("short_code", "")
+    if short_code:
+        c.setFont("Helvetica", 12)
+        c.drawCentredString(page_width / 2, qr_y - 0.75 * inch, f"Or enter code: {short_code}")
+
+    # Terms (if present)
+    terms = offer_data.get("terms")
+    if terms:
+        c.setFont("Helvetica", 9)
+        c.drawCentredString(page_width / 2, qr_y - 1.15 * inch, f"Terms: {terms[:100]}")
+
+    c.showPage()
+    c.save()
+    buffer.seek(0)
+    return buffer.getvalue()
+
+
+def _sanitize_filename(name: str) -> str:
+    """Sanitize a string for use in filenames."""
+    return re.sub(r'[^\w\-\s]', '', name).strip().replace(' ', '_')[:50]
+
+
+# --- QR Download Endpoints ---
+
+
+@app.get("/offers/{offer_id}/qr/download")
+async def download_offer_qr_pdf(offer_id: str, user=Depends(get_current_user)):
+    """Download a single offer's QR code as a styled PDF.
+
+    Auth: require merchant_admin or above for the offer's merchant.
+    """
+    offer_data, token_data, token_id, merchant_data = _get_offer_with_token_and_merchant(offer_id)
+    require_merchant_admin(user, offer_data["merchant_id"])
+
+    pdf_bytes = _generate_qr_pdf(offer_data, token_data, token_id, merchant_data)
+    filename = f"{_sanitize_filename(offer_data['name'])}_{token_data.get('short_code', 'qr')}.pdf"
+
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/offers/{offer_id}/qr/png")
+async def download_offer_qr_png(offer_id: str, user=Depends(get_current_user)):
+    """Download the raw QR code PNG for an offer.
+
+    Auth: require merchant_admin or above for the offer's merchant.
+    """
+    offer_data, token_data, token_id, merchant_data = _get_offer_with_token_and_merchant(offer_id)
+    require_merchant_admin(user, offer_data["merchant_id"])
+
+    qr_data = token_data.get("qr_data") or create_qr_data(token_id)
+    qr_bytes = generate_qr_image(qr_data)
+    filename = f"qr_{_sanitize_filename(offer_data['name'])}_{token_data.get('short_code', '')}.png"
+
+    return Response(
+        content=qr_bytes,
+        media_type="image/png",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+class BulkQrDownloadRequest(BaseModel):
+    offer_ids: list[str] = Field(..., min_length=1, max_length=100)
+
+
+@app.post("/qr/bulk-download")
+async def bulk_download_qr(data: BulkQrDownloadRequest, user=Depends(get_current_user)):
+    """Download multiple offers' QR codes as a ZIP file of styled PDFs.
+
+    Auth: require merchant_admin, all offers must belong to user's merchant (or owner).
+    """
+    db = get_db()
+    role = user.get("role")
+    user_merchant_id = get_merchant_id_from_user(user)
+
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        for offer_id in data.offer_ids:
+            try:
+                offer_data, token_data, token_id, merchant_data = _get_offer_with_token_and_merchant(offer_id)
+            except HTTPException:
+                continue  # Skip offers that don't exist or have no token
+
+            # Verify access: owner can access any, others must match merchant
+            if role != "owner":
+                if not user_merchant_id or offer_data["merchant_id"] != user_merchant_id:
+                    raise HTTPException(status_code=403, detail=f"Access denied for offer {offer_id}")
+
+            pdf_bytes = _generate_qr_pdf(offer_data, token_data, token_id, merchant_data)
+            filename = f"{_sanitize_filename(offer_data['name'])}_{token_data.get('short_code', 'qr')}.pdf"
+            zf.writestr(filename, pdf_bytes)
+
+    zip_buffer.seek(0)
+
+    return StreamingResponse(
+        iter([zip_buffer.getvalue()]),
+        media_type="application/zip",
+        headers={"Content-Disposition": 'attachment; filename="qr_codes.zip"'},
     )
 
 

@@ -393,3 +393,68 @@ export async function restoreMerchant(
     token,
   });
 }
+
+// QR Code Downloads
+
+export function getOfferQrPdfUrl(offerId: string): string {
+  return `${API_BASE}/offers/${offerId}/qr/download`;
+}
+
+export function getOfferQrPngUrl(offerId: string): string {
+  return `${API_BASE}/offers/${offerId}/qr/png`;
+}
+
+export function getBulkQrDownloadUrl(): string {
+  return `${API_BASE}/qr/bulk-download`;
+}
+
+/**
+ * Download a file from a URL with auth headers. Triggers browser download.
+ */
+export async function downloadFile(
+  url: string,
+  token: string,
+  fallbackFilename: string,
+  method: "GET" | "POST" = "GET",
+  body?: object,
+): Promise<void> {
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${token}`,
+  };
+  const init: RequestInit = { method, headers };
+  if (body) {
+    headers["Content-Type"] = "application/json";
+    init.body = JSON.stringify(body);
+  }
+
+  const response = await fetch(url, init);
+  if (!response.ok) {
+    let detail = "Download failed";
+    try {
+      const data = await response.json();
+      detail = data.detail || detail;
+    } catch {
+      // ignore
+    }
+    throw new ApiError(response.status, detail);
+  }
+
+  const blob = await response.blob();
+
+  // Try to extract filename from Content-Disposition header
+  const cd = response.headers.get("Content-Disposition");
+  let filename = fallbackFilename;
+  if (cd) {
+    const match = cd.match(/filename="?([^";\n]+)"?/);
+    if (match) filename = match[1];
+  }
+
+  const downloadUrl = window.URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = downloadUrl;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  window.URL.revokeObjectURL(downloadUrl);
+}
