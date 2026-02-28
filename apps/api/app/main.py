@@ -8,7 +8,17 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+import sentry_sdk
 from dotenv import load_dotenv
+
+# --- Sentry Error Monitoring ---
+_sentry_dsn = os.getenv("SENTRY_DSN")
+if _sentry_dsn:
+    sentry_sdk.init(
+        dsn=_sentry_dsn,
+        traces_sample_rate=0.1,
+        profiles_sample_rate=0.1,
+    )
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
