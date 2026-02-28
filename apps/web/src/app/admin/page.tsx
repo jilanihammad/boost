@@ -44,6 +44,10 @@ import {
   generateTokens,
   listTokens,
   getTokenQrUrl,
+  getOfferQrPdfUrl,
+  getOfferQrPngUrl,
+  getBulkQrDownloadUrl,
+  downloadFile,
   createUser,
   listUsers,
   deleteUser,
@@ -62,6 +66,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import {
   Building2,
   Tag,
@@ -77,6 +82,9 @@ import {
   Trash2,
   RotateCcw,
   Pencil,
+  FileDown,
+  Image,
+  Archive,
 } from "lucide-react"
 
 export default function AdminPage() {
@@ -151,6 +159,65 @@ export default function AdminPage() {
     type: "success" | "error"
     text: string
   } | null>(null)
+
+  // QR download state
+  const [downloadingQr, setDownloadingQr] = useState<string | null>(null)
+  const [bulkDownloading, setBulkDownloading] = useState(false)
+
+  // Download offer QR as PDF
+  const handleDownloadQrPdf = async (offer: Offer) => {
+    if (!idToken) return
+    setDownloadingQr(offer.id)
+    try {
+      await downloadFile(
+        getOfferQrPdfUrl(offer.id),
+        idToken,
+        `${offer.name}_qr.pdf`,
+      )
+    } catch (err: any) {
+      setOfferMessage({ type: "error", text: err.message || "Failed to download QR PDF" })
+    } finally {
+      setDownloadingQr(null)
+    }
+  }
+
+  // Download offer QR as PNG
+  const handleDownloadQrPng = async (offer: Offer) => {
+    if (!idToken) return
+    setDownloadingQr(offer.id)
+    try {
+      await downloadFile(
+        getOfferQrPngUrl(offer.id),
+        idToken,
+        `${offer.name}_qr.png`,
+      )
+    } catch (err: any) {
+      setOfferMessage({ type: "error", text: err.message || "Failed to download QR PNG" })
+    } finally {
+      setDownloadingQr(null)
+    }
+  }
+
+  // Bulk download all offers' QR codes as ZIP
+  const handleBulkDownloadQr = async () => {
+    if (!idToken || offers.length === 0) return
+    setBulkDownloading(true)
+    try {
+      const offerIds = offers.map((o) => o.id)
+      await downloadFile(
+        getBulkQrDownloadUrl(),
+        idToken,
+        "qr_codes.zip",
+        "POST",
+        { offer_ids: offerIds },
+      )
+      setOfferMessage({ type: "success", text: `Downloaded ${offerIds.length} QR codes as ZIP` })
+    } catch (err: any) {
+      setOfferMessage({ type: "error", text: err.message || "Failed to bulk download QR codes" })
+    } finally {
+      setBulkDownloading(false)
+    }
+  }
 
   // Load merchants
   useEffect(() => {
@@ -825,10 +892,30 @@ export default function AdminPage() {
                   {/* Offers List */}
                   <Card>
                     <CardHeader>
-                      <CardTitle>Existing Offers</CardTitle>
-                      <CardDescription>
-                        {offers.length} offer{offers.length !== 1 ? "s" : ""} created
-                      </CardDescription>
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <CardTitle>Existing Offers</CardTitle>
+                          <CardDescription>
+                            {offers.length} offer{offers.length !== 1 ? "s" : ""} created
+                          </CardDescription>
+                        </div>
+                        {offers.length > 0 && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={handleBulkDownloadQr}
+                            disabled={bulkDownloading}
+                            className="gap-2"
+                          >
+                            {bulkDownloading ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <Archive className="h-4 w-4" />
+                            )}
+                            Download All QR Codes
+                          </Button>
+                        )}
+                      </div>
                     </CardHeader>
                     <CardContent>
                       {offersLoading ? (
@@ -894,6 +981,44 @@ export default function AdminPage() {
                                       >
                                         <QrCode className="h-4 w-4" />
                                       </Button>
+                                      <Popover>
+                                        <PopoverTrigger asChild>
+                                          <Button
+                                            variant="ghost"
+                                            size="sm"
+                                            title="Download QR"
+                                            disabled={downloadingQr === o.id}
+                                          >
+                                            {downloadingQr === o.id ? (
+                                              <Loader2 className="h-4 w-4 animate-spin" />
+                                            ) : (
+                                              <Download className="h-4 w-4" />
+                                            )}
+                                          </Button>
+                                        </PopoverTrigger>
+                                        <PopoverContent align="end" className="w-44 p-2">
+                                          <div className="space-y-1">
+                                            <Button
+                                              variant="ghost"
+                                              size="sm"
+                                              className="w-full justify-start gap-2 text-sm"
+                                              onClick={() => handleDownloadQrPdf(o)}
+                                            >
+                                              <FileDown className="h-4 w-4" />
+                                              Download PDF
+                                            </Button>
+                                            <Button
+                                              variant="ghost"
+                                              size="sm"
+                                              className="w-full justify-start gap-2 text-sm"
+                                              onClick={() => handleDownloadQrPng(o)}
+                                            >
+                                              <Image className="h-4 w-4" />
+                                              Download PNG
+                                            </Button>
+                                          </div>
+                                        </PopoverContent>
+                                      </Popover>
                                       <Button
                                         variant="ghost"
                                         size="sm"
@@ -1056,7 +1181,43 @@ export default function AdminPage() {
                         </p>
                       ) : (
                         <>
-                          <div className="mb-4">
+                          <div className="mb-4 space-y-2">
+                            {selectedOfferForQr && (
+                              <div className="grid grid-cols-2 gap-2">
+                                <Button
+                                  variant="outline"
+                                  onClick={() => {
+                                    const offer = offers.find((o) => o.id === selectedOfferForQr)
+                                    if (offer) handleDownloadQrPdf(offer)
+                                  }}
+                                  disabled={downloadingQr === selectedOfferForQr}
+                                  className="gap-2"
+                                >
+                                  {downloadingQr === selectedOfferForQr ? (
+                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                  ) : (
+                                    <FileDown className="h-4 w-4" />
+                                  )}
+                                  Download PDF
+                                </Button>
+                                <Button
+                                  variant="outline"
+                                  onClick={() => {
+                                    const offer = offers.find((o) => o.id === selectedOfferForQr)
+                                    if (offer) handleDownloadQrPng(offer)
+                                  }}
+                                  disabled={downloadingQr === selectedOfferForQr}
+                                  className="gap-2"
+                                >
+                                  {downloadingQr === selectedOfferForQr ? (
+                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                  ) : (
+                                    <Image className="h-4 w-4" />
+                                  )}
+                                  Download PNG
+                                </Button>
+                              </div>
+                            )}
                             <Button
                               variant="outline"
                               onClick={downloadAllQrCodes}
@@ -1064,7 +1225,7 @@ export default function AdminPage() {
                               className="w-full gap-2"
                             >
                               <Download className="h-4 w-4" />
-                              Download All Active QR Codes ({activeTokensCount})
+                              Download Raw QR ({activeTokensCount})
                             </Button>
                           </div>
                           <div className="max-h-64 overflow-auto">
