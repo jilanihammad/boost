@@ -2,9 +2,9 @@
 
 from datetime import datetime
 from enum import Enum
-from typing import Optional
+from typing import Annotated, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, EmailStr, Field
 
 
 # --- Enums ---
@@ -47,14 +47,14 @@ class MerchantStatus(str, Enum):
 
 class MerchantCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
-    email: str = Field(..., min_length=5)
-    locations: list[str] = Field(default_factory=list)
+    email: EmailStr
+    locations: list[Annotated[str, Field(max_length=200)]] = Field(default_factory=list, max_length=50)
 
 
 class MerchantUpdate(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=100)
-    email: Optional[str] = Field(None, min_length=5)
-    locations: Optional[list[str]] = None
+    email: Optional[EmailStr] = None
+    locations: Optional[list[Annotated[str, Field(max_length=200)]]] = Field(None, max_length=50)
 
 
 class Merchant(BaseModel):
@@ -182,7 +182,7 @@ class LedgerSummary(BaseModel):
 
 class UserCreate(BaseModel):
     """Request to create/invite a user with a role."""
-    email: str = Field(..., min_length=5)
+    email: EmailStr
     role: UserRole
     merchant_id: Optional[str] = None  # Required for merchant_admin and staff
 

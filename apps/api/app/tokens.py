@@ -1,6 +1,7 @@
 """Token generation and QR code utilities."""
 
 import io
+import os
 import random
 import string
 import uuid
@@ -25,11 +26,14 @@ def generate_token_id() -> str:
     return str(uuid.uuid4())
 
 
-def create_qr_data(token_id: str, base_url: str = "https://boost-dev-3fabf.web.app") -> str:
+def create_qr_data(token_id: str, base_url: str | None = None) -> str:
     """Create QR code data payload.
 
     Format: URL that can be scanned directly.
     """
+    # TODO: Set BOOST_BASE_URL to a real custom domain for production
+    if base_url is None:
+        base_url = os.getenv("BOOST_BASE_URL", "https://boost-dev-3fabf.web.app")
     return f"{base_url}/r/{token_id}"
 
 

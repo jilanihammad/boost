@@ -1,0 +1,120 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper: check if user is authenticated
+    function isAuth() {
+      return request.auth != null;
+    }
+
+    // Helper: get user's custom claims role
+    function getRole() {
+      return request.auth.token.role;
+    }
+
+    // Helper: get user's merchant_id from custom claims
+    function getUserMerchantId() {
+      return request.auth.token.merchant_id;
+    }
+
+    // Helper: check if user is platform owner
+    function isOwner() {
+      return isAuth() && getRole() == 'owner';
+    }
+
+    // Helper: check if user is merchant_admin for a given merchant
+    function isMerchantAdmin(merchantId) {
+      return isAuth() && getRole() == 'merchant_admin' && getUserMerchantId() == merchantId;
+    }
+
+    // Helper: check if user is staff or above for a given merchant
+    function isStaffOrAbove(merchantId) {
+      return isOwner()
+        || isMerchantAdmin(merchantId)
+        || (isAuth() && getRole() == 'staff' && getUserMerchantId() == merchantId);
+    }
+
+    // --- Merchants ---
+    match /merchants/{merchantId} {
+      // Owner: full CRUD
+      allow read, write: if isOwner();
+      // merchant_admin / staff: read their own merchant only
+      allow read: if isStaffOrAbove(merchantId);
+    }
+
+    // --- Offers ---
+    match /offers/{offerId} {
+      // Owner: full CRUD
+      allow read, write: if isOwner();
+      // merchant_admin: CRUD on their own merchant's offers
+      allow read, write: if isAuth()
+        && getRole() == 'merchant_admin'
+        && resource.data.merchant_id == getUserMerchantId();
+      // Allow create when merchant_id in incoming data matches
+      allow create: if isAuth()
+        && getRole() == 'merchant_admin'
+        && request.resource.data.merchant_id == getUserMerchantId();
+      // staff: read their merchant's offers
+      allow read: if isAuth()
+        && getRole() == 'staff'
+        && resource.data.merchant_id == getUserMerchantId();
+    }
+
+    // --- Tokens (redemption_tokens) ---
+    match /redemption_tokens/{tokenId} {
+      // Owner: full CRUD
+      allow read, write: if isOwner();
+      // staff+: read tokens belonging to offers for their merchant
+      // Note: Firestore rules can't join collections, so we store merchant_id
+      // on the token or check via offer. For now, rely on the API layer for
+      // cross-collection checks. Allow read for staff+ if they can verify merchant.
+      // If tokens have an offer_id, the API must enforce merchant scoping.
+      allow read: if isAuth()
+        && getRole() in ['merchant_admin', 'staff'];
+      // merchant_admin can write (generate tokens)
+      allow write: if isAuth()
+        && getRole() == 'merchant_admin';
+    }
+
+    // --- Redemptions ---
+    match /redemptions/{redemptionId} {
+      // Owner: full CRUD
+      allow read, write: if isOwner();
+      // staff+: create redemptions for their merchant, read their merchant's
+      allow create: if isAuth()
+        && getRole() in ['merchant_admin', 'staff']
+        && request.resource.data.merchant_id == getUserMerchantId();
+      allow read: if isAuth()
+        && getRole() in ['merchant_admin', 'staff']
+        && resource.data.merchant_id == getUserMerchantId();
+    }
+
+    // --- Ledger (ledger_entries) ---
+    match /ledger_entries/{entryId} {
+      // Owner: full access
+      allow read, write: if isOwner();
+      // Merchant users: read-only for their merchant
+      allow read: if isAuth()
+        && getRole() in ['merchant_admin', 'staff']
+        && resource.data.merchant_id == getUserMerchantId();
+    }
+
+    // --- Users ---
+    match /users/{uid} {
+      // Owner: full CRUD
+      allow read, write: if isOwner();
+      // Users can read their own document
+      allow read: if isAuth() && request.auth.uid == uid;
+    }
+
+    // --- Pending Roles ---
+    match /pending_roles/{docId} {
+      // Owner: full write access
+      allow read, write: if isOwner();
+      // Users can read pending roles matching their email
+      allow read: if isAuth()
+        && resource.data.email == request.auth.token.email;
+    }
+  }
+}

@@ -1,13 +1,21 @@
 """Boost API - Main application."""
 
+import csv
+import io
+import logging
 import os
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from .auth import (
     require_owner,
@@ -48,7 +56,18 @@ load_dotenv()
 
 app = FastAPI(title="Boost API")
 
-origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")]
+# CORS: In production, CORS_ORIGINS must be set explicitly.
+# In dev (default), fall back to localhost.
+_env = os.getenv("ENVIRONMENT", "development").lower()
+_cors_raw = os.getenv("CORS_ORIGINS")
+
+if _env == "production" and not _cors_raw:
+    raise RuntimeError(
+        "CORS_ORIGINS env var must be set in production. "
+        "Example: CORS_ORIGINS=https://yourdomain.com,https://app.yourdomain.com"
+    )
+
+origins = [o.strip() for o in (_cors_raw or "http://localhost:3000").split(",")]
 
 app.add_middleware(
     CORSMiddleware,
@@ -57,6 +76,43 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# --- Rate Limiting (SlowAPI) ---
+limiter = Limiter(key_func=get_remote_address, default_limits=["60/minute"])
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+
+# --- Structured Logging ---
+_json_log_handler = logging.StreamHandler()
+_json_log_handler.setFormatter(
+    logging.Formatter(
+        '{"time":"%(asctime)s","level":"%(levelname)s","name":"%(name)s","message":"%(message)s"}'
+    )
+)
+logger = logging.getLogger("boost")
+logger.setLevel(logging.INFO)
+logger.addHandler(_json_log_handler)
+
+
+class RequestLoggingMiddleware(BaseHTTPMiddleware):
+    """Log method, path, status_code, duration_ms for every request."""
+
+    async def dispatch(self, request: Request, call_next):
+        start = time.time()
+        response = await call_next(request)
+        duration_ms = round((time.time() - start) * 1000, 2)
+        logger.info(
+            '{"method":"%s","path":"%s","status_code":%d,"duration_ms":%.2f}',
+            request.method,
+            request.url.path,
+            response.status_code,
+            duration_ms,
+        )
+        return response
+
+
+app.add_middleware(RequestLoggingMiddleware)
 
 
 def get_merchant_id_from_user(user: dict) -> Optional[str]:
@@ -68,7 +124,76 @@ def get_merchant_id_from_user(user: dict) -> Optional[str]:
 
 @app.get("/health")
 async def health():
-    return {"ok": True}
+    """Health check — verifies Firestore connectivity."""
+    try:
+        db = get_db()
+        # Attempt to list a single collection to verify connectivity
+        _cols = list(db.collections())  # noqa: F841
+        return {"ok": True}
+    except Exception as e:
+        logger.error("Health check failed: %s", str(e))
+        return {"ok": False, "error": str(e)}
+
+
+# --- Public Consumer Endpoints (no auth required) ---
+
+@app.get("/public/offers/{token_id_or_code}")
+async def get_public_offer_by_token(token_id_or_code: str):
+    """Public endpoint: resolve a token/code to offer details for the consumer claim page.
+    No auth required — this is what consumers see when they scan a QR code.
+    """
+    from .tokens import get_token_by_id_or_code
+
+    result = get_token_by_id_or_code(token_id_or_code)
+    if not result:
+        raise HTTPException(status_code=404, detail="Offer not found or expired")
+
+    token_id, token_data = result
+
+    # Check token is still valid
+    if token_data["status"] == "expired":
+        raise HTTPException(status_code=410, detail="This offer has expired")
+
+    expires_at = token_data["expires_at"]
+    if isinstance(expires_at, datetime) and expires_at < datetime.now(timezone.utc):
+        raise HTTPException(status_code=410, detail="This offer has expired")
+
+    # Get offer details
+    db = get_db()
+    offer_doc = db.collection(OFFERS).document(token_data["offer_id"]).get()
+    if not offer_doc.exists:
+        raise HTTPException(status_code=404, detail="Offer not found")
+
+    offer_data = offer_doc.to_dict()
+
+    if offer_data["status"] != OfferStatus.active.value:
+        raise HTTPException(status_code=410, detail="This offer is no longer active")
+
+    # Get merchant name
+    merchant_doc = db.collection(MERCHANTS).document(offer_data["merchant_id"]).get()
+    merchant_name = merchant_doc.to_dict().get("name", "Local Business") if merchant_doc.exists else "Local Business"
+
+    # Check daily cap
+    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    redemptions_query = (
+        db.collection(REDEMPTIONS)
+        .where("offer_id", "==", token_data["offer_id"])
+        .where("timestamp", ">=", today_start)
+    )
+    today_count = len(list(redemptions_query.stream()))
+    cap_remaining = max(0, offer_data["cap_daily"] - today_count)
+
+    return {
+        "token_id": token_id,
+        "short_code": token_data.get("short_code", ""),
+        "offer_name": offer_data["name"],
+        "discount_text": offer_data["discount_text"],
+        "terms": offer_data.get("terms"),
+        "merchant_name": merchant_name,
+        "active_hours": offer_data.get("active_hours"),
+        "cap_remaining": cap_remaining,
+        "qr_data": token_data.get("qr_data", ""),
+    }
 
 
 # --- Merchants ---
@@ -97,7 +222,11 @@ async def create_merchant(data: MerchantCreate, user=Depends(get_current_user)):
 
 
 @app.get("/merchants")
-async def list_merchants(user=Depends(get_current_user)):
+async def list_merchants(
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    user=Depends(get_current_user),
+):
     """List merchants.
 
     Owner: sees all merchants (including soft-deleted).
@@ -109,7 +238,8 @@ async def list_merchants(user=Depends(get_current_user)):
 
     if role == "owner":
         # Owner sees all merchants
-        docs = db.collection(MERCHANTS).stream()
+        query = db.collection(MERCHANTS).offset(offset).limit(limit)
+        docs = query.stream()
         merchants = [Merchant(id=doc.id, **doc.to_dict()) for doc in docs]
     elif user_merchant_id:
         # Merchant admin/staff sees only their merchant
@@ -121,7 +251,7 @@ async def list_merchants(user=Depends(get_current_user)):
     else:
         merchants = []
 
-    return {"merchants": merchants}
+    return {"merchants": merchants, "limit": limit, "offset": offset}
 
 
 @app.get("/merchants/{merchant_id}", response_model=Merchant)
@@ -221,9 +351,42 @@ async def create_offer(data: OfferCreate, user=Depends(get_current_user)):
     )
 
 
+def _batch_daily_redemption_counts(db, offer_ids: list[str], today_start: datetime) -> dict[str, int]:
+    """Batch-fetch today's redemption counts for multiple offers.
+
+    Caches results per-call to avoid repeated full scans (#8: bo-poh).
+    Groups offers into batches of 30 (Firestore 'in' query limit).
+    """
+    counts: dict[str, int] = {}
+    if not offer_ids:
+        return counts
+
+    # Firestore 'in' queries support up to 30 values
+    batch_size = 30
+    for i in range(0, len(offer_ids), batch_size):
+        batch = offer_ids[i : i + batch_size]
+        redemptions_query = (
+            db.collection(REDEMPTIONS)
+            .where("offer_id", "in", batch)
+            .where("timestamp", ">=", today_start)
+        )
+        for rdoc in redemptions_query.stream():
+            oid = rdoc.to_dict().get("offer_id")
+            if oid:
+                counts[oid] = counts.get(oid, 0) + 1
+
+    # Ensure all requested offer_ids have an entry
+    for oid in offer_ids:
+        counts.setdefault(oid, 0)
+
+    return counts
+
+
 @app.get("/offers")
 async def list_offers(
     merchant_id: Optional[str] = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     user=Depends(get_current_user),
 ):
     """List offers.
@@ -244,25 +407,21 @@ async def list_offers(
     elif user_merchant_id:
         query = query.where("merchant_id", "==", user_merchant_id)
     else:
-        return {"offers": []}
+        return {"offers": [], "limit": limit, "offset": offset}
 
-    docs = query.stream()
+    query = query.offset(offset).limit(limit)
+    docs = list(query.stream())
 
-    # Get today's redemption counts
+    # Batch-fetch today's redemption counts (#8: bo-poh)
     today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    offer_ids = [doc.id for doc in docs]
+    daily_counts = _batch_daily_redemption_counts(db, offer_ids, today_start)
 
     offers = []
     for doc in docs:
         data = doc.to_dict()
         offer_id = doc.id
-
-        # Count today's redemptions for this offer
-        redemptions_query = (
-            db.collection(REDEMPTIONS)
-            .where("offer_id", "==", offer_id)
-            .where("timestamp", ">=", today_start)
-        )
-        today_count = len(list(redemptions_query.stream()))
+        today_count = daily_counts.get(offer_id, 0)
 
         offers.append(
             Offer(
@@ -282,7 +441,7 @@ async def list_offers(
             )
         )
 
-    return {"offers": offers}
+    return {"offers": offers, "limit": limit, "offset": offset}
 
 
 @app.get("/offers/{offer_id}", response_model=Offer)
@@ -483,7 +642,8 @@ async def get_token_qr(token_id: str, user=Depends(get_current_user)):
 # --- Redemptions ---
 
 @app.post("/redeem", response_model=RedeemResponse)
-async def redeem_token(data: RedeemRequest, user=Depends(get_current_user)):
+@limiter.limit("10/minute")
+async def redeem_token(request: Request, data: RedeemRequest, user=Depends(get_current_user)):
     """Redeem a token (scan QR or enter code).
 
     Owner: can redeem any token.
@@ -604,7 +764,8 @@ async def redeem_token(data: RedeemRequest, user=Depends(get_current_user)):
 async def list_redemptions(
     merchant_id: Optional[str] = Query(None),
     offer_id: Optional[str] = Query(None),
-    limit: int = Query(50, le=200),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     user=Depends(get_current_user),
 ):
     """List redemptions.
@@ -625,12 +786,12 @@ async def list_redemptions(
     elif user_merchant_id:
         query = query.where("merchant_id", "==", user_merchant_id)
     else:
-        return {"redemptions": []}
+        return {"redemptions": [], "limit": limit, "offset": offset}
 
     if offer_id:
         query = query.where("offer_id", "==", offer_id)
 
-    query = query.order_by("timestamp", direction="DESCENDING").limit(limit)
+    query = query.order_by("timestamp", direction="DESCENDING").offset(offset).limit(limit)
 
     docs = query.stream()
 
@@ -642,7 +803,7 @@ async def list_redemptions(
             **data,
         })
 
-    return {"redemptions": redemptions}
+    return {"redemptions": redemptions, "limit": limit, "offset": offset}
 
 
 # --- Ledger (placeholder - will be expanded in Step 6) ---
@@ -688,6 +849,78 @@ async def get_ledger(
         "redemption_count": len(entries),
         "entries": entries,
     }
+
+
+@app.get("/ledger/export")
+async def export_ledger_csv(
+    merchant_id: str = Query(...),
+    user=Depends(get_current_user),
+):
+    """Export ledger as CSV for a merchant.
+
+    Columns: date, offer_name, redemption_id, amount, location.
+    """
+    db = get_db()
+    role = user.get("role")
+    user_merchant_id = get_merchant_id_from_user(user)
+
+    # Access check
+    if role == "owner":
+        target_merchant_id = merchant_id
+    elif user_merchant_id == merchant_id:
+        target_merchant_id = merchant_id
+    else:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    # Fetch ledger entries
+    query = db.collection(LEDGER).where("merchant_id", "==", target_merchant_id)
+    ledger_docs = list(query.stream())
+
+    # Build lookup for offer names and redemption locations
+    offer_names: dict[str, str] = {}
+    redemption_locations: dict[str, str] = {}
+
+    for ldoc in ledger_docs:
+        ld = ldoc.to_dict()
+        oid = ld.get("offer_id")
+        rid = ld.get("redemption_id")
+        if oid and oid not in offer_names:
+            offer_doc = db.collection(OFFERS).document(oid).get()
+            if offer_doc.exists:
+                offer_names[oid] = offer_doc.to_dict().get("name", "Unknown")
+            else:
+                offer_names[oid] = "Deleted Offer"
+        if rid and rid not in redemption_locations:
+            r_doc = db.collection(REDEMPTIONS).document(rid).get()
+            if r_doc.exists:
+                redemption_locations[rid] = r_doc.to_dict().get("location", "")
+            else:
+                redemption_locations[rid] = ""
+
+    # Write CSV
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["date", "offer_name", "redemption_id", "amount", "location"])
+
+    for ldoc in ledger_docs:
+        ld = ldoc.to_dict()
+        created_at = ld.get("created_at", "")
+        if isinstance(created_at, datetime):
+            created_at = created_at.strftime("%Y-%m-%d %H:%M:%S")
+        writer.writerow([
+            created_at,
+            offer_names.get(ld.get("offer_id", ""), ""),
+            ld.get("redemption_id", ""),
+            ld.get("amount", 0),
+            redemption_locations.get(ld.get("redemption_id", ""), ""),
+        ])
+
+    output.seek(0)
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename=ledger_{target_merchant_id}.csv"},
+    )
 
 
 # --- User Management ---
@@ -848,6 +1081,8 @@ async def claim_role(user=Depends(get_current_user)):
 @app.get("/admin/users")
 async def list_users(
     merchant_id: Optional[str] = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     user=Depends(get_current_user),
 ):
     """List users.
@@ -868,6 +1103,7 @@ async def list_users(
     else:
         raise HTTPException(status_code=403, detail="Access denied")
 
+    query = query.offset(offset).limit(limit)
     docs = query.stream()
     users = []
     for doc in docs:
@@ -887,7 +1123,7 @@ async def list_users(
         data = doc.to_dict()
         pending.append({"id": doc.id, **data})
 
-    return {"users": users, "pending": pending}
+    return {"users": users, "pending": pending, "limit": limit, "offset": offset}
 
 
 @app.delete("/admin/users/{uid}")
@@ -999,4 +1235,39 @@ async def delete_merchant(merchant_id: str, user=Depends(get_current_user)):
         })
         orphaned_count += 1
 
-    return {"deleted": True, "id": merchant_id, "orphaned_users": orphaned_count}
+    # Pause all active offers for this merchant
+    paused_offers = 0
+    offers_query = db.collection(OFFERS).where("merchant_id", "==", merchant_id).where("status", "==", OfferStatus.active.value)
+    for offer_doc in offers_query.stream():
+        offer_doc.reference.update({
+            "status": OfferStatus.paused.value,
+            "updated_at": now,
+        })
+        paused_offers += 1
+
+    # Expire all active tokens for this merchant's offers
+    expired_tokens = 0
+    all_offers_query = db.collection(OFFERS).where("merchant_id", "==", merchant_id)
+    for offer_doc in all_offers_query.stream():
+        tokens_query = db.collection(TOKENS).where("offer_id", "==", offer_doc.id).where("status", "==", TokenStatus.active.value)
+        for token_doc in tokens_query.stream():
+            token_doc.reference.update({
+                "status": TokenStatus.expired.value,
+            })
+            expired_tokens += 1
+
+    # Cancel pending_roles for this merchant (#9: bo-24h cascade)
+    cancelled_pending = 0
+    pending_query = db.collection(PENDING_ROLES).where("merchant_id", "==", merchant_id).where("claimed", "==", False)
+    for pending_doc in pending_query.stream():
+        pending_doc.reference.update({"claimed": True})
+        cancelled_pending += 1
+
+    return {
+        "deleted": True,
+        "id": merchant_id,
+        "orphaned_users": orphaned_count,
+        "paused_offers": paused_offers,
+        "expired_tokens": expired_tokens,
+        "cancelled_pending_roles": cancelled_pending,
+    }
