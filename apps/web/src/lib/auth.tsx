@@ -49,7 +49,7 @@ const EMAIL_FOR_SIGNIN_KEY = "boost_emailForSignIn";
 function getActionCodeSettings() {
   const url =
     process.env.NEXT_PUBLIC_EMAIL_LINK_REDIRECT ||
-    (typeof window !== "undefined" ? window.location.origin + "/login" : "");
+    (typeof window !== "undefined" ? window.location.origin + "/login/complete" : "");
 
   return {
     url,
