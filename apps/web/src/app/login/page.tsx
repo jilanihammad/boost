@@ -170,8 +170,8 @@ export default function LoginPage() {
         </Card>
 
         <p className="mt-6 text-center text-xs text-muted-foreground">
-          By signing in, you agree to our <a className="text-primary hover:underline" href="#">Terms of Service</a> and{" "}
-          <a className="text-primary hover:underline" href="#">Privacy Policy</a>
+          By signing in, you agree to our <a className="text-primary hover:underline" href="/terms">Terms of Service</a> and{" "}
+          <a className="text-primary hover:underline" href="/privacy">Privacy Policy</a>
         </p>
       </div>
     </main>
