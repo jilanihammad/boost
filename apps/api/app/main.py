@@ -41,7 +41,8 @@ from .auth import (
 )
 from .consumer import router as consumer_router
 from .consumer import parse_personal_qr
-from .db import get_db, MERCHANTS, OFFERS, TOKENS, REDEMPTIONS, LEDGER, USERS, PENDING_ROLES, CONSUMERS, CONSUMER_VISITS, CONSUMER_CLAIMS
+from .loyalty import router as loyalty_router
+from .db import get_db, MERCHANTS, OFFERS, TOKENS, REDEMPTIONS, LEDGER, USERS, PENDING_ROLES, CONSUMERS, CONSUMER_VISITS, CONSUMER_CLAIMS, LOYALTY_CONFIGS, LOYALTY_PROGRESS, REWARDS
 from .deps import get_current_user
 from .models import (
     MerchantCreate,
@@ -131,6 +132,9 @@ app.add_middleware(RequestLoggingMiddleware)
 
 # --- Consumer Router ---
 app.include_router(consumer_router, prefix="/api/v1")
+
+# --- Loyalty Router ---
+app.include_router(loyalty_router, prefix="/api/v1")
 
 
 def get_merchant_id_from_user(user: dict) -> Optional[str]:
@@ -944,7 +948,78 @@ async def redeem_token(request: Request, data: RedeemRequest, user=Depends(get_c
         visit_number = len(prev_visits) + 1
 
         # Create consumer_visit record
+        stamp_earned = False
         visit_ref = db.collection(CONSUMER_VISITS).document()
+
+        # --- Loyalty stamp tracking ---
+        merchant_id = offer_data["merchant_id"]
+        loyalty_doc = db.collection(LOYALTY_CONFIGS).document(merchant_id).get()
+        reward_earned_msg = None
+
+        if loyalty_doc.exists:
+            lconfig = loyalty_doc.to_dict()
+            stamps_to_add = 1
+
+            # Double stamp day? (0=Monday .. 6=Sunday)
+            current_weekday = now.weekday()  # Python: 0=Monday
+            if current_weekday in lconfig.get("double_stamp_days", []):
+                stamps_to_add = 2
+
+            # Look up or create loyalty_progress
+            progress_id = f"{consumer_uid}_{merchant_id}"
+            progress_ref = db.collection(LOYALTY_PROGRESS).document(progress_id)
+            progress_doc = progress_ref.get()
+
+            if progress_doc.exists:
+                progress = progress_doc.to_dict()
+            else:
+                progress = {
+                    "consumer_id": consumer_uid,
+                    "merchant_id": merchant_id,
+                    "current_stamps": 0,
+                    "total_stamps": 0,
+                    "rewards_earned": 0,
+                    "rewards_redeemed": 0,
+                    "last_visit": None,
+                }
+
+            progress["current_stamps"] += stamps_to_add
+            progress["total_stamps"] += stamps_to_add
+            progress["last_visit"] = now
+            stamp_earned = True
+
+            # Check if reward threshold reached
+            stamps_required = lconfig.get("stamps_required", 10)
+            if progress["current_stamps"] >= stamps_required:
+                # Create a reward
+                from datetime import timedelta as _td
+
+                reward_ref = db.collection(REWARDS).document()
+                reward_ref.set({
+                    "consumer_id": consumer_uid,
+                    "merchant_id": merchant_id,
+                    "description": lconfig.get("reward_description", "Free reward"),
+                    "value": lconfig.get("reward_value", 0),
+                    "status": "earned",
+                    "earned_at": now,
+                    "redeemed_at": None,
+                    "expires_at": now + _td(days=30),
+                })
+
+                progress["rewards_earned"] = progress.get("rewards_earned", 0) + 1
+
+                # Reset stamps if configured
+                if lconfig.get("reset_on_reward", True):
+                    progress["current_stamps"] = progress["current_stamps"] - stamps_required
+                    # Handle case where double stamps could exceed threshold by more
+                    if progress["current_stamps"] < 0:
+                        progress["current_stamps"] = 0
+
+                reward_earned_msg = lconfig.get("reward_description", "Free reward")
+
+            # Persist loyalty progress
+            progress_ref.set(progress)
+
         visit_ref.set({
             "consumer_id": consumer_uid,
             "merchant_id": offer_data["merchant_id"],
@@ -953,10 +1028,41 @@ async def redeem_token(request: Request, data: RedeemRequest, user=Depends(get_c
             "zone_id": None,
             "visit_number": visit_number,
             "points_earned": 50,
-            "stamp_earned": False,
+            "stamp_earned": stamp_earned,
             "referred_by": None,
             "timestamp": now,
         })
+
+        # --- Global points tracking ---
+        from google.cloud.firestore_v1 import Increment as _Increment
+
+        db.collection(CONSUMERS).document(consumer_uid).update({
+            "global_points": _Increment(50),
+        })
+
+        # Read updated points and check for universal reward threshold
+        updated_consumer = db.collection(CONSUMERS).document(consumer_uid).get()
+        if updated_consumer.exists:
+            current_points = updated_consumer.to_dict().get("global_points", 0)
+            while current_points >= 500:
+                # Create a universal reward
+                universal_reward_ref = db.collection(REWARDS).document()
+                universal_reward_ref.set({
+                    "consumer_id": consumer_uid,
+                    "merchant_id": None,
+                    "description": "$5 credit at any Boost merchant",
+                    "status": "earned",
+                    "reward_value": 5.0,
+                    "is_universal": True,
+                    "earned_at": now,
+                    "expires_at": now + timedelta(days=30),
+                    "redeemed_at": None,
+                })
+                # Deduct 500 points
+                db.collection(CONSUMERS).document(consumer_uid).update({
+                    "global_points": _Increment(-500),
+                })
+                current_points -= 500
 
         # Mark claim as redeemed
         claim_docs = list(
@@ -970,6 +1076,24 @@ async def redeem_token(request: Request, data: RedeemRequest, user=Depends(get_c
         if claim_docs:
             claim_docs[0].reference.update({"redeemed": True})
 
+        # Build loyalty fields for the response
+        resp_stamp_progress = None
+        resp_reward_earned = None
+        resp_reward_description = None
+
+        if loyalty_doc.exists:
+            lconfig = loyalty_doc.to_dict()
+            stamps_required = lconfig.get("stamps_required", 10)
+            # Re-read the persisted progress to get the final current_stamps
+            final_progress = db.collection(LOYALTY_PROGRESS).document(f"{consumer_uid}_{merchant_id}").get()
+            if final_progress.exists:
+                final_stamps = final_progress.to_dict().get("current_stamps", 0)
+            else:
+                final_stamps = 0
+            resp_stamp_progress = f"{final_stamps}/{stamps_required}"
+            resp_reward_earned = reward_earned_msg is not None
+            resp_reward_description = reward_earned_msg
+
         return RedeemResponse(
             success=True,
             message="Redemption successful!",
@@ -978,6 +1102,9 @@ async def redeem_token(request: Request, data: RedeemRequest, user=Depends(get_c
             redemption_id=redemption_ref.id,
             consumer_name=consumer_name,
             visit_number=visit_number,
+            stamp_progress=resp_stamp_progress,
+            reward_earned=resp_reward_earned,
+            reward_description=resp_reward_description,
         )
 
     # --------------- Universal token flow (existing) ---------------

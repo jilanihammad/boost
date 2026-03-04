@@ -117,6 +117,43 @@ service cloud.firestore {
         && resource.data.email == request.auth.token.email;
     }
 
+    // --- Loyalty Configs ---
+    match /loyalty_configs/{merchantId} {
+      // Owner: full CRUD
+      allow read, write: if isOwner();
+      // Merchant admin: read/write their own
+      allow read, write: if isMerchantAdmin(merchantId);
+      // Staff: read their merchant's config
+      allow read: if isAuth()
+        && getRole() == 'staff'
+        && getUserMerchantId() == merchantId;
+      // Consumers: read any merchant's loyalty config (needed for wallet display)
+      allow read: if isAuth();
+    }
+
+    // --- Loyalty Progress ---
+    match /loyalty_progress/{progressId} {
+      // Owner: full access
+      allow read, write: if isOwner();
+      // Consumers: read their own progress (doc ID is {consumer_id}_{merchant_id})
+      allow read: if isAuth()
+        && resource.data.consumer_id == request.auth.uid;
+      // System writes only (via API) — no direct client writes
+    }
+
+    // --- Rewards ---
+    match /rewards/{rewardId} {
+      // Owner: full access
+      allow read, write: if isOwner();
+      // Consumers: read their own rewards
+      allow read: if isAuth()
+        && resource.data.consumer_id == request.auth.uid;
+      // Staff: read rewards for their merchant
+      allow read: if isAuth()
+        && getRole() in ['merchant_admin', 'staff']
+        && resource.data.merchant_id == getUserMerchantId();
+    }
+
     // --- Consumers ---
     match /consumers/{uid} {
       // Owner: full access (admin oversight)

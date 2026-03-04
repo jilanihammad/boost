@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from .db import get_db, CONSUMERS, CONSUMER_CLAIMS, CONSUMER_VISITS, OFFERS, MERCHANTS, REDEMPTIONS
+from .db import get_db, CONSUMERS, CONSUMER_CLAIMS, CONSUMER_VISITS, OFFERS, MERCHANTS, REDEMPTIONS, REWARDS, LOYALTY_PROGRESS, LOYALTY_CONFIGS
 from .deps import get_current_user, get_current_consumer
 from .models import (
     ConsumerRegisterRequest,
@@ -19,6 +19,8 @@ from .models import (
     ConsumerWalletResponse,
     ActiveClaim,
     VisitHistoryItem,
+    WalletReward,
+    MerchantLoyaltyProgress,
     OfferStatus,
 )
 
@@ -382,6 +384,89 @@ async def get_wallet(user=Depends(get_current_consumer)):
                 timestamp=data.get("timestamp", now),
                 visit_number=data.get("visit_number", 1),
                 points_earned=data.get("points_earned", 0),
+                stamp_earned=data.get("stamp_earned", False),
+            )
+        )
+
+    # --- Merchant loyalty progress ---
+    loyalty_progress_query = (
+        db.collection(LOYALTY_PROGRESS)
+        .where("consumer_id", "==", uid)
+    )
+
+    merchant_loyalty: list[MerchantLoyaltyProgress] = []
+    for doc in loyalty_progress_query.stream():
+        lp_data = doc.to_dict()
+        lp_merchant_id = lp_data.get("merchant_id", "")
+
+        # Look up merchant name (reuse cache)
+        if lp_merchant_id not in merchant_cache:
+            m_doc = db.collection(MERCHANTS).document(lp_merchant_id).get()
+            merchant_cache[lp_merchant_id] = (
+                m_doc.to_dict().get("name", "Local Business") if m_doc.exists else "Local Business"
+            )
+
+        # Look up loyalty config for stamps_required and reward_description
+        lc_doc = db.collection(LOYALTY_CONFIGS).document(lp_merchant_id).get()
+        if lc_doc.exists:
+            lc_data = lc_doc.to_dict()
+            stamps_required = lc_data.get("stamps_required", 10)
+            reward_description = lc_data.get("reward_description", "Free reward")
+        else:
+            stamps_required = 10
+            reward_description = "Free reward"
+
+        current_stamps = lp_data.get("current_stamps", 0)
+        visits_until_reward = max(0, stamps_required - current_stamps)
+
+        merchant_loyalty.append(
+            MerchantLoyaltyProgress(
+                merchant_id=lp_merchant_id,
+                merchant_name=merchant_cache[lp_merchant_id],
+                current_stamps=current_stamps,
+                stamps_required=stamps_required,
+                reward_description=reward_description,
+                visits_until_reward=visits_until_reward,
+            )
+        )
+
+    # --- Rewards: earned, unredeemed, unexpired ---
+    rewards_query = (
+        db.collection(REWARDS)
+        .where("consumer_id", "==", uid)
+        .where("status", "==", "earned")
+    )
+    rewards: list[WalletReward] = []
+    for doc in rewards_query.stream():
+        data = doc.to_dict()
+        expires_at = data.get("expires_at")
+        # Skip expired rewards
+        if isinstance(expires_at, datetime) and expires_at < now:
+            continue
+
+        is_universal = data.get("is_universal", False)
+        merchant_id = data.get("merchant_id")
+
+        if is_universal or merchant_id is None:
+            merchant_name = "Any Boost merchant"
+        else:
+            # Look up merchant name (reuse cache from visit history)
+            if merchant_id not in merchant_cache:
+                m_doc = db.collection(MERCHANTS).document(merchant_id).get()
+                merchant_cache[merchant_id] = (
+                    m_doc.to_dict().get("name", "Local Business") if m_doc.exists else "Local Business"
+                )
+            merchant_name = merchant_cache[merchant_id]
+
+        rewards.append(
+            WalletReward(
+                id=doc.id,
+                description=data.get("description", ""),
+                status=data.get("status", "earned"),
+                merchant_name=merchant_name,
+                is_universal=is_universal,
+                earned_at=data.get("earned_at", now),
+                expires_at=expires_at,
             )
         )
 
@@ -389,4 +474,6 @@ async def get_wallet(user=Depends(get_current_consumer)):
         active_claims=active_claims,
         visit_history=visit_history,
         total_points=total_points,
+        rewards=rewards,
+        merchant_loyalty=merchant_loyalty,
     )

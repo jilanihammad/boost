@@ -14,6 +14,9 @@ import {
   ChevronDown,
   ChevronUp,
   Sparkles,
+  Gift,
+  Stamp,
+  Store,
 } from "lucide-react"
 import { QRCodeSVG } from "qrcode.react"
 
@@ -35,12 +38,34 @@ interface VisitHistoryItem {
   timestamp: string
   visit_number: number
   points_earned: number
+  stamp_earned: boolean
+}
+
+interface MerchantLoyaltyProgress {
+  merchant_id: string
+  merchant_name: string
+  current_stamps: number
+  stamps_required: number
+  reward_description: string
+  visits_until_reward: number
+}
+
+interface WalletReward {
+  id: string
+  description: string
+  status: string
+  merchant_name: string
+  is_universal: boolean
+  earned_at: string
+  expires_at: string | null
 }
 
 interface WalletData {
   active_claims: ActiveClaim[]
   visit_history: VisitHistoryItem[]
   total_points: number
+  rewards: WalletReward[]
+  merchant_loyalty: MerchantLoyaltyProgress[]
 }
 
 // ---------------------------------------------------------------------------
@@ -71,6 +96,7 @@ const MOCK_WALLET: WalletData = {
       timestamp: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
       visit_number: 3,
       points_earned: 50,
+      stamp_earned: true,
     },
     {
       merchant_name: "Tartine Bakery",
@@ -78,6 +104,7 @@ const MOCK_WALLET: WalletData = {
       timestamp: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString(),
       visit_number: 1,
       points_earned: 50,
+      stamp_earned: true,
     },
     {
       merchant_name: "The Butcher's Table",
@@ -85,9 +112,37 @@ const MOCK_WALLET: WalletData = {
       timestamp: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString(),
       visit_number: 2,
       points_earned: 50,
+      stamp_earned: false,
     },
   ],
   total_points: 150,
+  rewards: [],
+  merchant_loyalty: [
+    {
+      merchant_id: "m-001",
+      merchant_name: "Blue Bottle Coffee",
+      current_stamps: 3,
+      stamps_required: 5,
+      reward_description: "Free latte",
+      visits_until_reward: 2,
+    },
+    {
+      merchant_id: "m-002",
+      merchant_name: "Tartine Bakery",
+      current_stamps: 1,
+      stamps_required: 8,
+      reward_description: "Free pastry",
+      visits_until_reward: 7,
+    },
+    {
+      merchant_id: "m-003",
+      merchant_name: "The Butcher's Table",
+      current_stamps: 7,
+      stamps_required: 10,
+      reward_description: "Free appetizer",
+      visits_until_reward: 3,
+    },
+  ],
 }
 
 // ---------------------------------------------------------------------------
@@ -191,6 +246,83 @@ function ClaimCard({ claim }: { claim: ActiveClaim }) {
 }
 
 // ---------------------------------------------------------------------------
+// Merchant Loyalty Card (digital punch card)
+// ---------------------------------------------------------------------------
+
+function MerchantLoyaltyCard({
+  loyalty,
+}: {
+  loyalty: MerchantLoyaltyProgress
+}) {
+  const stamps = Array.from({ length: loyalty.stamps_required }, (_, i) => i)
+  const progressPercent =
+    (loyalty.current_stamps / loyalty.stamps_required) * 100
+
+  return (
+    <Card className="border-border bg-card hover:border-primary/30 transition-all">
+      <CardContent className="p-4 space-y-3">
+        {/* Header */}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2 min-w-0">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/15">
+              <Store className="h-4 w-4 text-primary" />
+            </div>
+            <h3 className="text-sm font-semibold text-card-foreground truncate">
+              {loyalty.merchant_name}
+            </h3>
+          </div>
+          <span className="text-xs font-medium text-muted-foreground shrink-0">
+            {loyalty.current_stamps}/{loyalty.stamps_required}
+          </span>
+        </div>
+
+        {/* Stamp dots */}
+        <div className="flex flex-wrap gap-1.5 justify-center">
+          {stamps.map((i) => (
+            <div
+              key={i}
+              className={`h-6 w-6 rounded-full border-2 flex items-center justify-center transition-all ${
+                i < loyalty.current_stamps
+                  ? "border-primary bg-primary/20"
+                  : "border-border bg-secondary/50"
+              }`}
+            >
+              {i < loyalty.current_stamps && (
+                <Stamp className="h-3 w-3 text-primary" />
+              )}
+            </div>
+          ))}
+        </div>
+
+        {/* Progress bar */}
+        <div className="h-1.5 w-full rounded-full bg-secondary">
+          <div
+            className="h-1.5 rounded-full bg-primary transition-all duration-500"
+            style={{ width: `${progressPercent}%` }}
+          />
+        </div>
+
+        {/* Reward info */}
+        <p className="text-xs text-center text-muted-foreground">
+          {loyalty.visits_until_reward === 0 ? (
+            <span className="font-medium text-primary">
+              🎉 Reward ready: {loyalty.reward_description}!
+            </span>
+          ) : (
+            <>
+              <span className="font-medium text-primary">
+                {loyalty.visits_until_reward} more
+              </span>{" "}
+              → {loyalty.reward_description}
+            </>
+          )}
+        </p>
+      </CardContent>
+    </Card>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Main Wallet Page
 // ---------------------------------------------------------------------------
 
@@ -228,6 +360,11 @@ export default function WalletPage() {
 
   const hasActiveClaims = wallet.active_claims.length > 0
   const hasVisits = wallet.visit_history.length > 0
+  const hasRewards = wallet.rewards.length > 0
+  const hasMerchantLoyalty = wallet.merchant_loyalty.length > 0
+  const pointsTowardReward = wallet.total_points % 500
+  const pointsRemaining = 500 - pointsTowardReward
+  const progressPercent = (pointsTowardReward / 500) * 100
 
   return (
     <main className="min-h-screen bg-background pb-24">
@@ -244,18 +381,94 @@ export default function WalletPage() {
       <div className="mx-auto max-w-md px-4 py-6 space-y-6">
         {/* Points Card */}
         <Card className="border-primary/30 bg-gradient-to-br from-primary/10 via-card to-card">
-          <CardContent className="flex items-center gap-4 p-5">
-            <div className="flex h-12 w-12 items-center justify-center rounded-full bg-primary/20">
-              <Sparkles className="h-6 w-6 text-primary" />
+          <CardContent className="p-5 space-y-4">
+            <div className="flex items-center gap-4">
+              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-primary/20">
+                <Sparkles className="h-6 w-6 text-primary" />
+              </div>
+              <div>
+                <p className="text-sm text-muted-foreground">Total Points</p>
+                <p className="text-3xl font-bold text-card-foreground">
+                  {wallet.total_points.toLocaleString()}
+                </p>
+              </div>
             </div>
-            <div>
-              <p className="text-sm text-muted-foreground">Total Points</p>
-              <p className="text-3xl font-bold text-card-foreground">
-                {wallet.total_points.toLocaleString()}
-              </p>
+
+            {/* Progress toward next $5 reward */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-muted-foreground">
+                  {pointsTowardReward}/500 toward next reward
+                </span>
+                <span className="font-medium text-primary">
+                  {pointsRemaining} more → $5 reward at any merchant
+                </span>
+              </div>
+              <div className="h-2 w-full rounded-full bg-secondary">
+                <div
+                  className="h-2 rounded-full bg-primary transition-all duration-500"
+                  style={{ width: `${progressPercent}%` }}
+                />
+              </div>
             </div>
           </CardContent>
         </Card>
+
+        {/* Merchant Loyalty — Punch Cards */}
+        {hasMerchantLoyalty && (
+          <section>
+            <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+              <Store className="h-4 w-4" />
+              Your Merchants
+            </h2>
+            <div className="grid grid-cols-1 gap-3">
+              {wallet.merchant_loyalty.map((loyalty) => (
+                <MerchantLoyaltyCard
+                  key={loyalty.merchant_id}
+                  loyalty={loyalty}
+                />
+              ))}
+            </div>
+          </section>
+        )}
+
+        {/* Rewards Available */}
+        {hasRewards && (
+          <section>
+            <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+              <Gift className="h-4 w-4" />
+              Rewards Available
+            </h2>
+            <div className="space-y-3">
+              {wallet.rewards.map((reward) => (
+                <Card
+                  key={reward.id}
+                  className="border-primary/30 bg-gradient-to-r from-primary/5 to-card hover:border-primary/50 transition-all"
+                >
+                  <CardContent className="flex items-center gap-3 p-4">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary/20">
+                      <Gift className="h-5 w-5 text-primary" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-semibold text-card-foreground">
+                        {reward.description}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {reward.merchant_name}
+                        {reward.expires_at &&
+                          ` · Expires ${new Date(reward.expires_at).toLocaleDateString("en-US", { month: "short", day: "numeric" })}`}
+                      </p>
+                    </div>
+                    <Badge variant="secondary" className="text-xs shrink-0">
+                      <Sparkles className="mr-1 h-3 w-3" />
+                      Earned
+                    </Badge>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          </section>
+        )}
 
         {/* Active Deals */}
         <section>
@@ -298,9 +511,14 @@ export default function WalletPage() {
                       <MapPin className="h-4 w-4 text-muted-foreground" />
                     </div>
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-card-foreground truncate">
-                        {visit.merchant_name}
-                      </p>
+                      <div className="flex items-center gap-1.5">
+                        <p className="text-sm font-medium text-card-foreground truncate">
+                          {visit.merchant_name}
+                        </p>
+                        {visit.stamp_earned && (
+                          <Stamp className="h-3.5 w-3.5 text-primary shrink-0" />
+                        )}
+                      </div>
                       <p className="text-xs text-muted-foreground truncate">
                         {visit.offer_name} · Visit #{visit.visit_number}
                       </p>

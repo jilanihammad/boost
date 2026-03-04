@@ -39,6 +39,12 @@ import {
 
 type RedemptionResult = "idle" | "scanning" | "success" | "already_redeemed" | "expired"
 
+interface LoyaltyContext {
+  stamp_progress: string | null
+  reward_earned: boolean | null
+  reward_description: string | null
+}
+
 export default function RedeemPage() {
   const { role, logout } = useAuth()
   const [manualCode, setManualCode] = useState("")
@@ -47,6 +53,7 @@ export default function RedeemPage() {
   const [isManualDialogOpen, setIsManualDialogOpen] = useState(false)
   const [consumerName, setConsumerName] = useState<string | null>(null)
   const [visitNumber, setVisitNumber] = useState<number | null>(null)
+  const [loyaltyContext, setLoyaltyContext] = useState<LoyaltyContext | null>(null)
 
   const isAdmin = role === "merchant_admin"
 
@@ -75,6 +82,7 @@ export default function RedeemPage() {
     setResult("idle")
     setConsumerName(null)
     setVisitNumber(null)
+    setLoyaltyContext(null)
   }
 
   return (
@@ -229,35 +237,91 @@ export default function RedeemPage() {
         )}
 
         {result === "success" && (
-          <Card className="w-full max-w-sm border-success/30 bg-success/10">
+          <Card
+            className={`w-full max-w-sm transition-all ${
+              loyaltyContext?.reward_earned
+                ? "border-2 border-primary bg-primary/5 animate-in fade-in zoom-in-95 duration-500"
+                : "border-success/30 bg-success/10"
+            }`}
+          >
             <CardContent className="py-8 text-center">
-              <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-success/20">
-                <CheckCircle2 className="h-10 w-10 text-success" />
-              </div>
-              <h2 className="text-2xl font-semibold text-foreground">
-                Redemption Successful
-              </h2>
-              <p className="mt-2 text-muted-foreground">
-                $2 off any coffee applied
-              </p>
+              {loyaltyContext?.reward_earned ? (
+                <>
+                  <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-primary/20">
+                    <span className="text-4xl">🎉</span>
+                  </div>
+                  <h2 className="text-2xl font-semibold text-foreground">
+                    Reward Earned!
+                  </h2>
+                  <p className="mt-2 text-lg font-medium text-primary">
+                    {loyaltyContext.reward_description}
+                  </p>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    Let them know — make it a moment!
+                  </p>
+                </>
+              ) : (
+                <>
+                  <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-success/20">
+                    <CheckCircle2 className="h-10 w-10 text-success" />
+                  </div>
+                  <h2 className="text-2xl font-semibold text-foreground">
+                    Redemption Successful
+                  </h2>
+                  <p className="mt-2 text-muted-foreground">
+                    $2 off any coffee applied
+                  </p>
+                </>
+              )}
+
               {/* Consumer context — shown when personal QR is redeemed */}
               {consumerName && (
-                <div className="mt-3 rounded-lg bg-success/10 px-4 py-2">
-                  <p className="text-sm font-medium text-foreground">
-                    Customer: {consumerName}
-                    {visitNumber != null && (
-                      <span className="ml-1 text-muted-foreground">
-                        — Visit #{visitNumber}
-                      </span>
-                    )}
-                  </p>
+                <div className="mt-3 space-y-2">
+                  <div className="rounded-lg bg-card/80 border border-border px-4 py-3">
+                    <p className="text-sm font-medium text-foreground">
+                      Customer: {consumerName}
+                    </p>
+                    <div className="mt-1 flex items-center justify-center gap-2 text-xs text-muted-foreground">
+                      {visitNumber != null && (
+                        <span>Visit #{visitNumber}</span>
+                      )}
+                      {loyaltyContext?.stamp_progress && (
+                        <>
+                          <span className="text-border">·</span>
+                          <span>
+                            Stamp {loyaltyContext.stamp_progress}
+                          </span>
+                        </>
+                      )}
+                      {loyaltyContext &&
+                        !loyaltyContext.reward_earned &&
+                        loyaltyContext.stamp_progress && (
+                          <>
+                            <span className="text-border">·</span>
+                            <span className="text-primary font-medium">
+                              {(() => {
+                                const parts =
+                                  loyaltyContext.stamp_progress.split("/")
+                                const remaining =
+                                  parseInt(parts[1]) - parseInt(parts[0])
+                                return `${remaining} more → ${loyaltyContext.reward_description || "reward"}`
+                              })()}
+                            </span>
+                          </>
+                        )}
+                    </div>
+                  </div>
                 </div>
               )}
-              <p className="mt-1 text-sm text-muted-foreground">
+              <p className="mt-3 text-sm text-muted-foreground">
                 Code: BOOST-7K3M
               </p>
               <Button
-                className="mt-6 w-full bg-success text-success-foreground hover:bg-success/90"
+                className={`mt-6 w-full ${
+                  loyaltyContext?.reward_earned
+                    ? "bg-primary text-primary-foreground hover:bg-primary/90"
+                    : "bg-success text-success-foreground hover:bg-success/90"
+                }`}
                 onClick={resetResult}
               >
                 Scan Next Customer

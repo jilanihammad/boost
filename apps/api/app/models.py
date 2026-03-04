@@ -152,6 +152,9 @@ class RedeemResponse(BaseModel):
     redemption_id: Optional[str] = None
     consumer_name: Optional[str] = None
     visit_number: Optional[int] = None
+    stamp_progress: Optional[str] = None  # e.g. "3/5"
+    reward_earned: Optional[bool] = None
+    reward_description: Optional[str] = None
 
 
 class Redemption(BaseModel):
@@ -264,6 +267,28 @@ class VisitHistoryItem(BaseModel):
     timestamp: datetime
     visit_number: int
     points_earned: int
+    stamp_earned: bool = False
+
+
+class WalletReward(BaseModel):
+    """A reward available in the consumer wallet."""
+    id: str
+    description: str
+    status: str
+    merchant_name: str
+    is_universal: bool = False
+    earned_at: datetime
+    expires_at: Optional[datetime] = None
+
+
+class MerchantLoyaltyProgress(BaseModel):
+    """Loyalty stamp progress for a consumer at a specific merchant."""
+    merchant_id: str
+    merchant_name: str
+    current_stamps: int
+    stamps_required: int
+    reward_description: str
+    visits_until_reward: int
 
 
 class ConsumerWalletResponse(BaseModel):
@@ -271,6 +296,62 @@ class ConsumerWalletResponse(BaseModel):
     active_claims: list[ActiveClaim] = []
     visit_history: list[VisitHistoryItem] = []
     total_points: int = 0
+    rewards: list[WalletReward] = []
+    merchant_loyalty: list[MerchantLoyaltyProgress] = []
+
+
+# --- Loyalty ---
+
+
+class RewardStatus(str, Enum):
+    earned = "earned"
+    redeemed = "redeemed"
+    expired = "expired"
+
+
+class LoyaltyConfigCreate(BaseModel):
+    """Request to create/update a loyalty stamp program for a merchant."""
+    stamps_required: int = Field(..., ge=1, le=100)
+    reward_description: str = Field(..., min_length=1, max_length=200)
+    reward_value: float = Field(..., ge=0)
+    reset_on_reward: bool = True
+    double_stamp_days: list[int] = Field(default_factory=list)  # 0=Mon .. 6=Sun
+    birthday_reward: bool = False
+
+
+class LoyaltyConfig(BaseModel):
+    """Loyalty config stored in Firestore (keyed by merchant_id)."""
+    merchant_id: str
+    program_type: str = "stamps"
+    stamps_required: int
+    reward_description: str
+    reward_value: float
+    reset_on_reward: bool = True
+    double_stamp_days: list[int] = Field(default_factory=list)
+    birthday_reward: bool = False
+
+
+class LoyaltyProgressResponse(BaseModel):
+    """Current loyalty progress for a consumer at a merchant."""
+    consumer_id: str
+    merchant_id: str
+    current_stamps: int = 0
+    total_stamps: int = 0
+    rewards_earned: int = 0
+    rewards_redeemed: int = 0
+    last_visit: Optional[datetime] = None
+
+
+class RewardResponse(BaseModel):
+    """A reward earned (or redeemed/expired) by a consumer."""
+    id: str
+    consumer_id: str
+    merchant_id: str
+    description: str
+    status: RewardStatus
+    earned_at: datetime
+    redeemed_at: Optional[datetime] = None
+    expires_at: Optional[datetime] = None
 
 
 class ConsumerRegisterRequest(BaseModel):
