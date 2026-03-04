@@ -2,7 +2,7 @@
 
 import { createContext, useContext, useState, type ReactNode } from "react"
 
-export type UserRole = "merchant_staff" | "merchant_admin"
+export type UserRole = "merchant_staff" | "merchant_admin" | "consumer"
 
 interface User {
   id: string
@@ -16,8 +16,10 @@ interface AuthContextType {
   isAuthenticated: boolean
   role: UserRole
   setRole: (role: UserRole) => void
-  login: (email: string) => void
+  login: (email: string, opts?: { name?: string; role?: UserRole }) => void
   logout: () => void
+  isConsumer: boolean
+  isMerchant: boolean
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
@@ -31,12 +33,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   })
   const [role, setRole] = useState<UserRole>("merchant_admin")
 
-  const login = (email: string) => {
+  const login = (email: string, opts?: { name?: string; role?: UserRole }) => {
+    const loginRole = opts?.role ?? role
+    setRole(loginRole)
     setUser({
       id: "user-1",
       email,
-      name: "Alex Chen",
-      role,
+      name: opts?.name ?? "Alex Chen",
+      role: loginRole,
     })
   }
 
@@ -53,6 +57,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setRole,
         login,
         logout,
+        isConsumer: user?.role === "consumer",
+        isMerchant: user?.role === "merchant_admin" || user?.role === "merchant_staff",
       }}
     >
       {children}

@@ -30,6 +30,12 @@ class UserRole(str, Enum):
     owner = "owner"
     merchant_admin = "merchant_admin"
     staff = "staff"
+    consumer = "consumer"
+
+
+class ConsumerTier(str, Enum):
+    free = "free"
+    boost_plus = "boost_plus"
 
 
 class UserStatus(str, Enum):
@@ -144,6 +150,8 @@ class RedeemResponse(BaseModel):
     offer_name: Optional[str] = None
     discount_text: Optional[str] = None
     redemption_id: Optional[str] = None
+    consumer_name: Optional[str] = None
+    visit_number: Optional[int] = None
 
 
 class Redemption(BaseModel):
@@ -225,3 +233,68 @@ class UserResponse(BaseModel):
     status: str  # "claimed" if user exists, "pending" if invite sent
     user_id: Optional[str] = None
     pending_id: Optional[str] = None
+
+
+# --- Consumer ---
+
+
+class ConsumerClaimResponse(BaseModel):
+    """Response after a consumer claims an offer — contains their personal QR."""
+    qr_data: str
+    short_code: str
+    expires_at: datetime
+    offer_name: str
+    merchant_name: str
+    points_preview: int = 50
+
+
+class ActiveClaim(BaseModel):
+    """A claimed but not-yet-redeemed deal in the consumer wallet."""
+    qr_data: str
+    short_code: str
+    expires_at: datetime
+    offer_name: str
+    merchant_name: str
+
+
+class VisitHistoryItem(BaseModel):
+    """A past visit entry for the consumer wallet."""
+    merchant_name: str
+    offer_name: str
+    timestamp: datetime
+    visit_number: int
+    points_earned: int
+
+
+class ConsumerWalletResponse(BaseModel):
+    """Full wallet payload returned to the consumer."""
+    active_claims: list[ActiveClaim] = []
+    visit_history: list[VisitHistoryItem] = []
+    total_points: int = 0
+
+
+class ConsumerRegisterRequest(BaseModel):
+    """Request to register a consumer profile after Firebase Auth signup."""
+    display_name: str = Field(..., min_length=1, max_length=100)
+    zip_code: Optional[str] = Field(None, max_length=10)
+    lat: Optional[float] = Field(None, ge=-90, le=90)
+    lng: Optional[float] = Field(None, ge=-180, le=180)
+    referred_by: Optional[str] = Field(None, max_length=20)  # Referral code
+
+
+class ConsumerProfile(BaseModel):
+    """Consumer profile stored in Firestore."""
+    uid: str
+    email: str
+    phone: Optional[str] = None
+    display_name: str
+    home_zone_id: Optional[str] = None
+    location_verified_at: Optional[datetime] = None
+    zip_code: Optional[str] = None
+    lat: Optional[float] = None
+    lng: Optional[float] = None
+    tier: ConsumerTier = ConsumerTier.free
+    global_points: int = 0
+    referral_code: str
+    referred_by: Optional[str] = None
+    created_at: datetime

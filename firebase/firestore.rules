@@ -116,5 +116,16 @@ service cloud.firestore {
       allow read: if isAuth()
         && resource.data.email == request.auth.token.email;
     }
+
+    // --- Consumers ---
+    match /consumers/{uid} {
+      // Owner: full access (admin oversight)
+      allow read, write: if isOwner();
+      // Consumers can read and update their own document only
+      allow read, update: if isAuth() && request.auth.uid == uid;
+      // Consumer profile creation is handled by the API (not direct client writes)
+      // but allow create for the consumer's own doc as fallback
+      allow create: if isAuth() && request.auth.uid == uid;
+    }
   }
 }

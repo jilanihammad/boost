@@ -45,6 +45,8 @@ export default function RedeemPage() {
   const [result, setResult] = useState<RedemptionResult>("idle")
   const [location, setLocation] = useState(merchant.locations[0])
   const [isManualDialogOpen, setIsManualDialogOpen] = useState(false)
+  const [consumerName, setConsumerName] = useState<string | null>(null)
+  const [visitNumber, setVisitNumber] = useState<number | null>(null)
 
   const isAdmin = role === "merchant_admin"
 
@@ -71,6 +73,8 @@ export default function RedeemPage() {
 
   const resetResult = () => {
     setResult("idle")
+    setConsumerName(null)
+    setVisitNumber(null)
   }
 
   return (
@@ -236,6 +240,19 @@ export default function RedeemPage() {
               <p className="mt-2 text-muted-foreground">
                 $2 off any coffee applied
               </p>
+              {/* Consumer context — shown when personal QR is redeemed */}
+              {consumerName && (
+                <div className="mt-3 rounded-lg bg-success/10 px-4 py-2">
+                  <p className="text-sm font-medium text-foreground">
+                    Customer: {consumerName}
+                    {visitNumber != null && (
+                      <span className="ml-1 text-muted-foreground">
+                        — Visit #{visitNumber}
+                      </span>
+                    )}
+                  </p>
+                </div>
+              )}
               <p className="mt-1 text-sm text-muted-foreground">
                 Code: BOOST-7K3M
               </p>

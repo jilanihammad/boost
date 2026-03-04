@@ -39,7 +39,9 @@ from .auth import (
     get_user_by_email,
     can_delete_user,
 )
-from .db import get_db, MERCHANTS, OFFERS, TOKENS, REDEMPTIONS, LEDGER, USERS, PENDING_ROLES
+from .consumer import router as consumer_router
+from .consumer import parse_personal_qr
+from .db import get_db, MERCHANTS, OFFERS, TOKENS, REDEMPTIONS, LEDGER, USERS, PENDING_ROLES, CONSUMERS, CONSUMER_VISITS, CONSUMER_CLAIMS
 from .deps import get_current_user
 from .models import (
     MerchantCreate,
@@ -126,6 +128,9 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
 
 
 app.add_middleware(RequestLoggingMiddleware)
+
+# --- Consumer Router ---
+app.include_router(consumer_router, prefix="/api/v1")
 
 
 def get_merchant_id_from_user(user: dict) -> Optional[str]:
@@ -836,13 +841,146 @@ async def bulk_download_qr(data: BulkQrDownloadRequest, user=Depends(get_current
 async def redeem_token(request: Request, data: RedeemRequest, user=Depends(get_current_user)):
     """Redeem a token (scan QR or enter code).
 
+    Supports two flows:
+    1. Personal QR (boost://claim/...) — extracts consumer identity, creates visit record
+    2. Universal token (UUID / short code) — existing legacy flow
+
     Owner: can redeem any token.
     Merchant admin/staff: can redeem tokens for their merchant.
     """
     db = get_db()
 
-    # Note: We check merchant access after looking up the token,
-    # since we need the offer to know which merchant it belongs to.
+    # --------------- Detect personal QR vs universal token ---------------
+    personal = parse_personal_qr(data.token)
+
+    if personal:
+        # --- Personal QR flow ---
+        consumer_uid = personal["consumer_uid"]
+        offer_id = personal["offer_id"]
+        claim_ts = personal["timestamp"]
+
+        # Get offer details
+        offer_doc = db.collection(OFFERS).document(offer_id).get()
+        if not offer_doc.exists:
+            raise HTTPException(status_code=404, detail="Offer not found")
+        offer_data = offer_doc.to_dict()
+
+        # Check staff access for this merchant
+        require_staff_or_above(user, offer_data["merchant_id"])
+
+        # Check offer is still active
+        if offer_data["status"] != OfferStatus.active.value:
+            return RedeemResponse(success=False, message="This offer is no longer active")
+
+        # Check the claim hasn't expired (end of day it was created)
+        claim_time = datetime.fromtimestamp(claim_ts, tz=timezone.utc)
+        claim_eod = claim_time.replace(hour=23, minute=59, second=59)
+        now = datetime.now(timezone.utc)
+        if now > claim_eod:
+            return RedeemResponse(success=False, message="This personal QR code has expired")
+
+        # Check daily cap
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        redemptions_query = (
+            db.collection(REDEMPTIONS)
+            .where("offer_id", "==", offer_id)
+            .where("timestamp", ">=", today_start)
+        )
+        today_count = len(list(redemptions_query.stream()))
+        if today_count >= offer_data["cap_daily"]:
+            return RedeemResponse(success=False, message="Daily redemption limit reached for this offer")
+
+        # Check if this personal claim was already redeemed
+        existing_redemptions = list(
+            db.collection(REDEMPTIONS)
+            .where("consumer_id", "==", consumer_uid)
+            .where("offer_id", "==", offer_id)
+            .where("timestamp", ">=", today_start)
+            .limit(1)
+            .stream()
+        )
+        if existing_redemptions:
+            return RedeemResponse(success=False, message="This offer has already been redeemed by this customer today")
+
+        # Get consumer profile
+        consumer_doc = db.collection(CONSUMERS).document(consumer_uid).get()
+        consumer_name = None
+        if consumer_doc.exists:
+            consumer_name = consumer_doc.to_dict().get("display_name")
+
+        value = offer_data.get("value_per_redemption", 2.0)
+
+        # Create redemption record (with consumer_id)
+        redemption_ref = db.collection(REDEMPTIONS).document()
+        redemption_data = {
+            "token_id": None,  # personal QR, no universal token
+            "offer_id": offer_id,
+            "merchant_id": offer_data["merchant_id"],
+            "method": data.method.value,
+            "location": data.location,
+            "value": value,
+            "timestamp": now,
+            "consumer_id": consumer_uid,
+        }
+        redemption_ref.set(redemption_data)
+
+        # Create ledger entry
+        ledger_ref = db.collection(LEDGER).document()
+        ledger_ref.set({
+            "merchant_id": offer_data["merchant_id"],
+            "redemption_id": redemption_ref.id,
+            "offer_id": offer_id,
+            "amount": value,
+            "created_at": now,
+        })
+
+        # Count previous visits for this consumer at this merchant
+        prev_visits = list(
+            db.collection(CONSUMER_VISITS)
+            .where("consumer_id", "==", consumer_uid)
+            .where("merchant_id", "==", offer_data["merchant_id"])
+            .stream()
+        )
+        visit_number = len(prev_visits) + 1
+
+        # Create consumer_visit record
+        visit_ref = db.collection(CONSUMER_VISITS).document()
+        visit_ref.set({
+            "consumer_id": consumer_uid,
+            "merchant_id": offer_data["merchant_id"],
+            "offer_id": offer_id,
+            "redemption_id": redemption_ref.id,
+            "zone_id": None,
+            "visit_number": visit_number,
+            "points_earned": 50,
+            "stamp_earned": False,
+            "referred_by": None,
+            "timestamp": now,
+        })
+
+        # Mark claim as redeemed
+        claim_docs = list(
+            db.collection(CONSUMER_CLAIMS)
+            .where("consumer_uid", "==", consumer_uid)
+            .where("offer_id", "==", offer_id)
+            .where("claimed_at", ">=", today_start)
+            .limit(1)
+            .stream()
+        )
+        if claim_docs:
+            claim_docs[0].reference.update({"redeemed": True})
+
+        return RedeemResponse(
+            success=True,
+            message="Redemption successful!",
+            offer_name=offer_data["name"],
+            discount_text=offer_data["discount_text"],
+            redemption_id=redemption_ref.id,
+            consumer_name=consumer_name,
+            visit_number=visit_number,
+        )
+
+    # --------------- Universal token flow (existing) ---------------
 
     # Look up token
     result = get_token_by_id_or_code(data.token)
