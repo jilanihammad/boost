@@ -1,7 +1,7 @@
 "use client"
 
-import React, { useState } from "react"
-import { useRouter } from "next/navigation"
+import React, { useState, useEffect } from "react"
+import { useRouter, useSearchParams } from "next/navigation"
 import { BoostLogo } from "@/components/boost-logo"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -35,6 +35,15 @@ export default function JoinPage() {
 
   const { login } = useAuth()
   const router = useRouter()
+  const searchParams = useSearchParams()
+
+  // Pre-fill referral code from URL query param (?ref=CODE)
+  useEffect(() => {
+    const refCode = searchParams.get("ref")
+    if (refCode) {
+      setReferralCode(refCode.toUpperCase())
+    }
+  }, [searchParams])
 
   // Step 1: Auth — mock Google sign-in
   const handleGoogleSignIn = () => {
@@ -116,7 +125,7 @@ export default function JoinPage() {
       payload.referred_by = referralCode.trim()
     }
 
-    // TODO: Replace with real API call when backend is wired
+    // TODO: Replace with real API calls when backend is wired
     // const res = await fetch("/api/v1/consumer/register", {
     //   method: "POST",
     //   headers: {
@@ -125,6 +134,18 @@ export default function JoinPage() {
     //   },
     //   body: JSON.stringify(payload),
     // })
+    //
+    // // After registration, submit referral code if provided
+    // if (referralCode.trim()) {
+    //   await fetch("/api/v1/consumer/referral", {
+    //     method: "POST",
+    //     headers: {
+    //       "Content-Type": "application/json",
+    //       Authorization: `Bearer ${firebaseToken}`,
+    //     },
+    //     body: JSON.stringify({ referral_code: referralCode.trim() }),
+    //   })
+    // }
 
     // Mock success
     setTimeout(() => {

@@ -1,3 +1,4 @@
 __pycache__/
 .DS_Store
 apps/api/app/__pycache__/
+apps/api/app/__pycache__/

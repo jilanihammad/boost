@@ -184,7 +184,7 @@ export default function HomePage() {
                 Join Boost to create deals, attract new customers, and build
                 loyalty — all in one simple platform.
               </p>
-              <Link href="/join">
+              <Link href="/merchant-signup">
                 <Button size="lg">
                   <Zap className="mr-1.5 h-4 w-4" />
                   Get Started Free
@@ -210,7 +210,7 @@ export default function HomePage() {
                 Sign In
               </Link>
               <Link
-                href="/join"
+                href="/merchant-signup"
                 className="text-xs text-muted-foreground hover:text-foreground"
               >
                 For Business

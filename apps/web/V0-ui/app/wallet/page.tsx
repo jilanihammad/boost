@@ -17,6 +17,10 @@ import {
   Gift,
   Stamp,
   Store,
+  Users,
+  Copy,
+  Check,
+  Share2,
 } from "lucide-react"
 import { QRCodeSVG } from "qrcode.react"
 
@@ -58,6 +62,18 @@ interface WalletReward {
   is_universal: boolean
   earned_at: string
   expires_at: string | null
+}
+
+interface ReferralData {
+  code: string
+  share_url: string
+}
+
+interface ReferralListItem {
+  referred_name: string
+  status: string
+  points_earned: number
+  created_at: string
 }
 
 interface WalletData {
@@ -323,6 +339,136 @@ function MerchantLoyaltyCard({
 }
 
 // ---------------------------------------------------------------------------
+// Invite Friends Card (Referral)
+// ---------------------------------------------------------------------------
+
+function InviteFriendsCard({
+  referral,
+  referrals,
+}: {
+  referral: ReferralData | null
+  referrals: ReferralListItem[]
+}) {
+  const [copied, setCopied] = useState(false)
+
+  const totalReferralPoints = referrals.reduce(
+    (sum, r) => sum + r.points_earned,
+    0
+  )
+
+  const handleCopy = async () => {
+    if (!referral) return
+    try {
+      await navigator.clipboard.writeText(referral.share_url)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      // Fallback for older browsers
+      const input = document.createElement("input")
+      input.value = referral.share_url
+      document.body.appendChild(input)
+      input.select()
+      document.execCommand("copy")
+      document.body.removeChild(input)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    }
+  }
+
+  const handleShare = async () => {
+    if (!referral) return
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: "Join me on Boost!",
+          text: `Use my referral code ${referral.code} to earn 50 bonus points on Boost!`,
+          url: referral.share_url,
+        })
+      } catch {
+        // User cancelled share
+      }
+    } else {
+      handleCopy()
+    }
+  }
+
+  return (
+    <Card className="border-primary/30 bg-gradient-to-br from-primary/5 via-card to-card">
+      <CardContent className="p-5 space-y-4">
+        <div className="flex items-center gap-3">
+          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary/20">
+            <Users className="h-5 w-5 text-primary" />
+          </div>
+          <div>
+            <h3 className="text-base font-semibold text-card-foreground">
+              Invite Friends
+            </h3>
+            <p className="text-xs text-muted-foreground">
+              You earn 100 pts, they earn 50 pts
+            </p>
+          </div>
+        </div>
+
+        {referral ? (
+          <>
+            {/* Referral code display */}
+            <div className="flex items-center gap-2 rounded-lg bg-secondary/50 p-3">
+              <span className="flex-1 text-center font-mono text-xl font-bold tracking-[0.2em] text-card-foreground">
+                {referral.code}
+              </span>
+              <button
+                onClick={handleCopy}
+                className="flex h-9 w-9 items-center justify-center rounded-md bg-primary/15 text-primary hover:bg-primary/25 transition-colors"
+                title="Copy link"
+              >
+                {copied ? (
+                  <Check className="h-4 w-4" />
+                ) : (
+                  <Copy className="h-4 w-4" />
+                )}
+              </button>
+              <button
+                onClick={handleShare}
+                className="flex h-9 w-9 items-center justify-center rounded-md bg-primary/15 text-primary hover:bg-primary/25 transition-colors"
+                title="Share"
+              >
+                <Share2 className="h-4 w-4" />
+              </button>
+            </div>
+
+            {copied && (
+              <p className="text-center text-xs text-primary font-medium">
+                Link copied to clipboard!
+              </p>
+            )}
+
+            {/* Stats */}
+            {referrals.length > 0 && (
+              <div className="flex items-center justify-between text-xs text-muted-foreground border-t border-border pt-3">
+                <span>
+                  <span className="font-semibold text-card-foreground">
+                    {referrals.length}
+                  </span>{" "}
+                  friend{referrals.length !== 1 ? "s" : ""} referred
+                </span>
+                <span>
+                  <span className="font-semibold text-primary">
+                    +{totalReferralPoints}
+                  </span>{" "}
+                  pts earned
+                </span>
+              </div>
+            )}
+          </>
+        ) : (
+          <div className="animate-pulse h-12 bg-secondary/50 rounded-lg" />
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Main Wallet Page
 // ---------------------------------------------------------------------------
 
@@ -330,6 +476,8 @@ export default function WalletPage() {
   const { isAuthenticated, isConsumer } = useAuth()
   const router = useRouter()
   const [wallet, setWallet] = useState<WalletData | null>(null)
+  const [referral, setReferral] = useState<ReferralData | null>(null)
+  const [referrals, setReferrals] = useState<ReferralListItem[]>([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -339,12 +487,20 @@ export default function WalletPage() {
       return
     }
 
-    // TODO: Replace with real API call:
+    // TODO: Replace with real API calls:
     // fetch("/api/v1/consumer/wallet", { headers: { Authorization: `Bearer ${token}` } })
     //   .then(r => r.json())
     //   .then(setWallet)
+    // fetch("/api/v1/consumer/referral-code", { headers: { Authorization: `Bearer ${token}` } })
+    //   .then(r => r.json())
+    //   .then(setReferral)
+    // fetch("/api/v1/consumer/referrals", { headers: { Authorization: `Bearer ${token}` } })
+    //   .then(r => r.json())
+    //   .then(data => setReferrals(data.referrals))
     const timer = setTimeout(() => {
       setWallet(MOCK_WALLET)
+      setReferral({ code: "BX7K2M", share_url: "http://localhost:3000/join?ref=BX7K2M" })
+      setReferrals([])
       setLoading(false)
     }, 400)
     return () => clearTimeout(timer)
@@ -413,6 +569,9 @@ export default function WalletPage() {
             </div>
           </CardContent>
         </Card>
+
+        {/* Invite Friends (Referral) */}
+        <InviteFriendsCard referral={referral} referrals={referrals} />
 
         {/* Merchant Loyalty — Punch Cards */}
         {hasMerchantLoyalty && (
