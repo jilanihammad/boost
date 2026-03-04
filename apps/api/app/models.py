@@ -573,3 +573,30 @@ class InsightResponse(BaseModel):
     insights: list[str]
     generated_at: datetime
     cached: bool
+
+
+# --- Weekly Reports ---
+
+
+class WeeklyReportSummary(BaseModel):
+    """Summary of a weekly merchant report."""
+    id: str
+    merchant_id: str
+    week_start: str  # ISO date string
+    week_end: str  # ISO date string
+    new_customers: int = 0
+    returning_customers: int = 0
+    total_visits: int = 0
+    top_deal: Optional[str] = None
+    return_rate: float = 0.0  # 0.0-1.0
+    return_rate_trend: Optional[str] = None  # "up", "down", "flat"
+    rewards_earned: int = 0
+    estimated_revenue: float = 0.0
+    insights: list[str] = []
+    generated_at: datetime
+    html_body: Optional[str] = None  # Full rendered HTML (only in detail)
+
+
+class WeeklyReportList(BaseModel):
+    """List of weekly report summaries."""
+    reports: list[WeeklyReportSummary]
