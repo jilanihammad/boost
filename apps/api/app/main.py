@@ -39,14 +39,16 @@ from .auth import (
     get_user_by_email,
     can_delete_user,
 )
+from .ai_service import router as ai_router
 from .analytics import router as analytics_router
 from .consumer import router as consumer_router
 from .consumer import parse_personal_qr
 from .automations import router as automations_router
 from .automations import create_automated_message
 from .customers import router as customers_router
+from .zones import router as zones_router
 from .loyalty import router as loyalty_router
-from .db import get_db, MERCHANTS, OFFERS, TOKENS, REDEMPTIONS, LEDGER, USERS, PENDING_ROLES, CONSUMERS, CONSUMER_VISITS, CONSUMER_CLAIMS, LOYALTY_CONFIGS, LOYALTY_PROGRESS, REWARDS, AUTOMATED_MESSAGES
+from .db import get_db, MERCHANTS, OFFERS, TOKENS, REDEMPTIONS, LEDGER, USERS, PENDING_ROLES, CONSUMERS, CONSUMER_VISITS, CONSUMER_CLAIMS, LOYALTY_CONFIGS, LOYALTY_PROGRESS, REWARDS, AUTOMATED_MESSAGES, ZONES
 from .deps import get_current_user
 from .models import (
     MerchantCreate,
@@ -134,6 +136,9 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
 
 app.add_middleware(RequestLoggingMiddleware)
 
+# --- AI Service Router ---
+app.include_router(ai_router, prefix="/api/v1")
+
 # --- Consumer Router ---
 app.include_router(consumer_router, prefix="/api/v1")
 
@@ -148,6 +153,9 @@ app.include_router(automations_router, prefix="/api/v1")
 
 # --- Analytics Router ---
 app.include_router(analytics_router, prefix="/api/v1")
+
+# --- Zones Router (public, no auth) ---
+app.include_router(zones_router, prefix="/api/v1")
 
 
 def get_merchant_id_from_user(user: dict) -> Optional[str]:
@@ -363,6 +371,7 @@ async def create_offer(data: OfferCreate, user=Depends(get_current_user)):
         "cap_daily": data.cap_daily,
         "active_hours": data.active_hours,
         "value_per_redemption": data.value_per_redemption,
+        "target_audience": data.target_audience.value,
         "status": OfferStatus.active.value,
         "created_at": now,
         "updated_at": now,
@@ -543,6 +552,8 @@ async def update_offer(offer_id: str, data: OfferUpdate, user=Depends(get_curren
     update_data = data.model_dump(exclude_unset=True)
     if "status" in update_data:
         update_data["status"] = update_data["status"].value
+    if "target_audience" in update_data:
+        update_data["target_audience"] = update_data["target_audience"].value
 
     update_data["updated_at"] = datetime.now(timezone.utc)
 

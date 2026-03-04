@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from .db import get_db, CONSUMERS, CONSUMER_CLAIMS, CONSUMER_VISITS, OFFERS, MERCHANTS, REDEMPTIONS, REWARDS, LOYALTY_PROGRESS, LOYALTY_CONFIGS
+from .db import get_db, CONSUMERS, CONSUMER_CLAIMS, CONSUMER_VISITS, OFFERS, MERCHANTS, REDEMPTIONS, REWARDS, LOYALTY_PROGRESS, LOYALTY_CONFIGS, ZONES
 from .deps import get_current_user, get_current_consumer
 from .models import (
     ConsumerRegisterRequest,
@@ -95,11 +95,20 @@ async def register_consumer(
     # Determine if location was verified (lat/lng provided = browser geolocation)
     location_verified_at = now if (data.lat is not None and data.lng is not None) else None
 
+    # Attempt zone assignment based on lat/lng
+    home_zone_id = None
+    if data.lat is not None and data.lng is not None:
+        try:
+            from .zones import find_zone_for_location
+            home_zone_id = find_zone_for_location(data.lat, data.lng)
+        except Exception:
+            pass  # Don't block registration if zone lookup fails
+
     consumer_data = {
         "email": email,
         "phone": None,
         "display_name": data.display_name,
-        "home_zone_id": None,
+        "home_zone_id": home_zone_id,
         "location_verified_at": location_verified_at,
         "zip_code": data.zip_code,
         "lat": data.lat,

@@ -76,6 +76,13 @@ class Merchant(BaseModel):
 
 # --- Offer ---
 
+class TargetAudience(str, Enum):
+    everyone = "everyone"
+    new_only = "new_only"
+    returning_only = "returning_only"
+    referred_only = "referred_only"
+
+
 class OfferCreate(BaseModel):
     merchant_id: str
     name: str = Field(..., min_length=1, max_length=100)
@@ -84,6 +91,7 @@ class OfferCreate(BaseModel):
     cap_daily: int = Field(50, ge=1, le=10000)  # Max redemptions per day
     active_hours: Optional[str] = None  # e.g., "9am-5pm" (display only for v0)
     value_per_redemption: float = Field(2.0, ge=0.01)  # Amount merchant owes per redemption
+    target_audience: TargetAudience = TargetAudience.everyone  # Customer targeting (filtering logic in future bead)
 
 
 class OfferUpdate(BaseModel):
@@ -94,6 +102,7 @@ class OfferUpdate(BaseModel):
     active_hours: Optional[str] = None
     status: Optional[OfferStatus] = None
     value_per_redemption: Optional[float] = Field(None, ge=0.01)
+    target_audience: Optional[TargetAudience] = None  # Customer targeting (filtering logic in future bead)
 
 
 class Offer(BaseModel):
@@ -477,6 +486,50 @@ class AutomatedMessageRecord(BaseModel):
     resulted_in_visit: bool = False
 
 
+# --- Zones / Neighborhoods ---
+
+
+class ZoneCenter(BaseModel):
+    """Lat/lng center point for a zone."""
+    lat: float
+    lng: float
+
+
+class Zone(BaseModel):
+    """A geographic zone/neighborhood."""
+    id: str
+    name: str
+    slug: str
+    city: str
+    center: ZoneCenter
+    radius_miles: float = 2.0
+    status: str = "active"
+    merchant_count: int = 0
+    deal_count: int = 0
+
+
+class ZoneDeal(BaseModel):
+    """An active deal within a zone, used in zone detail and deal list views."""
+    offer_id: str
+    offer_name: str
+    merchant_name: str
+    discount_text: str
+    redemption_count: int = 0
+    terms: Optional[str] = None
+
+
+class ZoneMerchantSummary(BaseModel):
+    """A merchant within a zone, with their active deals."""
+    merchant_id: str
+    merchant_name: str
+    active_deals: list[ZoneDeal] = []
+
+
+class ZoneDetail(Zone):
+    """Zone detail: zone info plus merchants and their active deals."""
+    merchants: list[ZoneMerchantSummary] = []
+
+
 # --- Analytics (Retention Dashboard) ---
 
 
@@ -513,3 +566,10 @@ class LtvBucket(BaseModel):
 
 class LtvResponse(BaseModel):
     buckets: list[LtvBucket]
+
+
+class InsightResponse(BaseModel):
+    """AI-generated or rule-based insights for a merchant."""
+    insights: list[str]
+    generated_at: datetime
+    cached: bool

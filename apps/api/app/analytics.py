@@ -1,21 +1,26 @@
-"""Analytics endpoints: retention cohorts, deal performance, LTV distribution."""
+"""Analytics endpoints: retention cohorts, deal performance, LTV distribution, insights."""
 
+import logging
+import os
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from .auth import require_staff_or_above
-from .db import get_db, CONSUMER_VISITS, OFFERS, REDEMPTIONS
+from .db import get_db, CONSUMER_VISITS, OFFERS, REDEMPTIONS, INSIGHT_CACHE
 from .deps import get_current_user
 from .models import (
     DealPerformance,
+    InsightResponse,
     LtvBucket,
     RetentionCohort,
     RetentionResponse,
     DealPerformanceResponse,
     LtvResponse,
 )
+
+logger = logging.getLogger("boost")
 
 router = APIRouter(tags=["analytics"])
 
@@ -296,3 +301,259 @@ async def get_ltv_distribution(
     ]
 
     return LtvResponse(buckets=buckets)
+
+
+# ---------------------------------------------------------------------------
+# Insights helpers
+# ---------------------------------------------------------------------------
+
+
+def _build_deal_summary(db, merchant_id: str) -> list[dict]:
+    """Fetch deal performance data for insight generation."""
+    offers_query = db.collection(OFFERS).where("merchant_id", "==", merchant_id)
+    offer_docs = list(offers_query.stream())
+
+    visits_query = db.collection(CONSUMER_VISITS).where("merchant_id", "==", merchant_id)
+    all_visits = list(visits_query.stream())
+
+    # Build consumer visit lookup
+    consumer_all_visits: dict[str, list[datetime]] = {}
+    for v in all_visits:
+        vdata = v.to_dict()
+        cid = vdata.get("consumer_id")
+        ts = vdata.get("timestamp")
+        if cid and ts:
+            consumer_all_visits.setdefault(cid, []).append(ts)
+    for cid in consumer_all_visits:
+        consumer_all_visits[cid].sort()
+
+    # Group visits by offer
+    offer_visits: dict[str, list[tuple[str, datetime]]] = {}
+    for v in all_visits:
+        vdata = v.to_dict()
+        oid = vdata.get("offer_id")
+        cid = vdata.get("consumer_id")
+        ts = vdata.get("timestamp")
+        if oid and cid and ts:
+            offer_visits.setdefault(oid, []).append((cid, ts))
+
+    deals = []
+    for odoc in offer_docs:
+        odata = odoc.to_dict()
+        offer_id = odoc.id
+        visits_for_offer = offer_visits.get(offer_id, [])
+        redemption_count = len(visits_for_offer)
+
+        returned_14d = 0
+        unique_consumers = set()
+        for cid, visit_ts in visits_for_offer:
+            if cid in unique_consumers:
+                continue
+            unique_consumers.add(cid)
+            all_ts = consumer_all_visits.get(cid, [])
+            for later_ts in all_ts:
+                if later_ts <= visit_ts:
+                    continue
+                if (later_ts - visit_ts).days <= 14:
+                    returned_14d += 1
+                    break
+
+        total_unique = len(unique_consumers) or 1
+        return_rate = round(returned_14d / total_unique, 3)
+
+        deals.append({
+            "offer_name": odata.get("name", "Unknown"),
+            "redemption_count": redemption_count,
+            "return_rate_14d": return_rate,
+            "unique_customers": len(unique_consumers),
+        })
+
+    return deals
+
+
+def _build_segment_summary(db, merchant_id: str) -> dict[str, int]:
+    """Count customers by visit recency segment."""
+    visits_query = db.collection(CONSUMER_VISITS).where("merchant_id", "==", merchant_id)
+    all_visits = list(visits_query.stream())
+
+    now = datetime.now(timezone.utc)
+    consumer_last_visit: dict[str, datetime] = {}
+    consumer_visit_count: dict[str, int] = {}
+
+    for v in all_visits:
+        vdata = v.to_dict()
+        cid = vdata.get("consumer_id")
+        ts = vdata.get("timestamp")
+        if cid and ts:
+            consumer_visit_count[cid] = consumer_visit_count.get(cid, 0) + 1
+            if cid not in consumer_last_visit or ts > consumer_last_visit[cid]:
+                consumer_last_visit[cid] = ts
+
+    segments: dict[str, int] = {"new": 0, "returning": 0, "vip": 0, "at_risk": 0, "lost": 0}
+    for cid, last in consumer_last_visit.items():
+        days_since = (now - last).days
+        count = consumer_visit_count.get(cid, 1)
+
+        if count == 1 and days_since <= 14:
+            segments["new"] += 1
+        elif days_since > 30:
+            segments["lost"] += 1
+        elif days_since > 14:
+            segments["at_risk"] += 1
+        elif count >= 5:
+            segments["vip"] += 1
+        else:
+            segments["returning"] += 1
+
+    return segments
+
+
+def _generate_rule_based_insights(deals: list[dict], segments: dict[str, int]) -> list[str]:
+    """Generate 1-2 plain-language insights using simple rules (no AI)."""
+    insights: list[str] = []
+
+    # Insight 1: Best vs worst deal by return rate
+    if len(deals) >= 2:
+        sorted_deals = sorted(deals, key=lambda d: d["return_rate_14d"], reverse=True)
+        best = sorted_deals[0]
+        worst = sorted_deals[-1]
+
+        if best["return_rate_14d"] > worst["return_rate_14d"]:
+            diff_pct = round((best["return_rate_14d"] - worst["return_rate_14d"]) * 100)
+            insights.append(
+                f'"{best["offer_name"]}" has a {round(best["return_rate_14d"] * 100)}% '
+                f"14-day return rate — {diff_pct}pp higher than "
+                f'"{worst["offer_name"]}" ({round(worst["return_rate_14d"] * 100)}%). '
+                f"Consider increasing the daily cap on your top performer."
+            )
+    elif len(deals) == 1:
+        d = deals[0]
+        rate = round(d["return_rate_14d"] * 100)
+        insights.append(
+            f'"{d["offer_name"]}" is bringing back {rate}% of customers within 14 days. '
+            f"Try adding a second deal to compare performance."
+        )
+
+    # Insight 2: Segment trend (at-risk / lost flag)
+    total_customers = sum(segments.values())
+    if total_customers > 0:
+        at_risk = segments.get("at_risk", 0)
+        lost = segments.get("lost", 0)
+        at_risk_pct = round((at_risk + lost) / total_customers * 100)
+        if at_risk_pct >= 30:
+            insights.append(
+                f"{at_risk + lost} customers ({at_risk_pct}% of your base) are at-risk or lost. "
+                f"Consider sending a re-engagement offer to win them back."
+            )
+        elif segments.get("vip", 0) > 0:
+            vip_count = segments["vip"]
+            insights.append(
+                f"You have {vip_count} VIP customer{'s' if vip_count != 1 else ''} "
+                f"(5+ visits). Reward them with an exclusive deal to keep them coming back."
+            )
+
+    return insights[:2]
+
+
+async def _generate_ai_insights(deals: list[dict], segments: dict[str, int]) -> list[str]:
+    """Generate insights via OpenAI (if key is available)."""
+    try:
+        import openai
+
+        client = openai.OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+        data_summary = (
+            f"Deal performance: {deals}\n"
+            f"Customer segments: {segments}"
+        )
+
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Generate 1-2 plain-language insights for a local business owner. "
+                        "Be specific with numbers. Suggest an action."
+                    ),
+                },
+                {"role": "user", "content": data_summary},
+            ],
+            max_tokens=300,
+            temperature=0.7,
+        )
+
+        text = response.choices[0].message.content or ""
+        # Split into individual insights (by newline or numbered list)
+        lines = [l.strip().lstrip("0123456789.-) ") for l in text.strip().split("\n") if l.strip()]
+        return [l for l in lines if len(l) > 10][:2]
+
+    except Exception as e:
+        logger.warning("OpenAI insight generation failed, using fallback: %s", e)
+        return _generate_rule_based_insights(deals, segments)
+
+
+# ---------------------------------------------------------------------------
+# GET /merchants/{merchant_id}/insights
+# ---------------------------------------------------------------------------
+
+
+INSIGHT_CACHE_TTL = timedelta(hours=24)
+
+
+@router.get(
+    "/merchants/{merchant_id}/insights",
+    response_model=InsightResponse,
+)
+async def get_merchant_insights(
+    merchant_id: str,
+    user=Depends(get_current_user),
+):
+    """AI-generated or rule-based insights for a merchant.
+
+    Caches results in Firestore for 24h.
+    Auth: staff_or_above.
+    """
+    require_staff_or_above(user, merchant_id)
+
+    db = get_db()
+    now = datetime.now(timezone.utc)
+
+    # Check cache
+    cache_ref = db.collection(INSIGHT_CACHE).document(merchant_id)
+    cache_doc = cache_ref.get()
+
+    if cache_doc.exists:
+        cached = cache_doc.to_dict()
+        generated_at = cached.get("generated_at")
+        if generated_at and (now - generated_at) < INSIGHT_CACHE_TTL:
+            return InsightResponse(
+                insights=cached.get("insights", []),
+                generated_at=generated_at,
+                cached=True,
+            )
+
+    # Generate fresh insights
+    deals = _build_deal_summary(db, merchant_id)
+    segments = _build_segment_summary(db, merchant_id)
+
+    if os.getenv("OPENAI_API_KEY"):
+        insights = await _generate_ai_insights(deals, segments)
+    else:
+        insights = _generate_rule_based_insights(deals, segments)
+
+    # Fallback if no insights generated
+    if not insights:
+        insights = ["Add more deals and track redemptions to unlock personalized insights."]
+
+    # Cache in Firestore
+    cache_data = {
+        "insights": insights,
+        "generated_at": now,
+    }
+    cache_ref.set(cache_data)
+
+    return InsightResponse(
+        insights=insights,
+        generated_at=now,
+        cached=False,
+    )

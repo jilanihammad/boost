@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import Link from "next/link"
 import { BoostLogo } from "@/components/boost-logo"
 import { RoleToggle } from "@/components/role-toggle"
@@ -51,6 +51,8 @@ import {
   Upload,
   Sparkles,
   Heart,
+  Lightbulb,
+  Loader2,
 } from "lucide-react"
 
 // --- Heatmap cell color helper ---
@@ -71,6 +73,45 @@ export default function DashboardPage() {
     key: "return_rate_14d",
     asc: false,
   })
+
+  // --- AI Insights state ---
+  const [insights, setInsights] = useState<string[]>([])
+  const [insightsUpdatedAt, setInsightsUpdatedAt] = useState<string | null>(null)
+  const [insightsLoading, setInsightsLoading] = useState(true)
+
+  useEffect(() => {
+    async function fetchInsights() {
+      try {
+        // Use merchant-001 as default merchant ID (matches mock data)
+        const merchantId = "merchant-001"
+        const res = await fetch(
+          `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/api/v1/merchants/${merchantId}/insights`,
+          {
+            headers: { Authorization: `Bearer placeholder` },
+          }
+        )
+        if (res.ok) {
+          const data = await res.json()
+          setInsights(data.insights || [])
+          if (data.generated_at) {
+            const genDate = new Date(data.generated_at)
+            const hoursAgo = Math.max(
+              0,
+              Math.round((Date.now() - genDate.getTime()) / (1000 * 60 * 60))
+            )
+            setInsightsUpdatedAt(
+              hoursAgo === 0 ? "Just now" : `${hoursAgo}h ago`
+            )
+          }
+        }
+      } catch {
+        // Silently fail — fallback UI will show
+      } finally {
+        setInsightsLoading(false)
+      }
+    }
+    fetchInsights()
+  }, [])
 
   const isAdmin = role === "merchant_admin"
 
@@ -428,22 +469,42 @@ export default function DashboardPage() {
                   </TableBody>
                 </Table>
               </div>
-              {/* AI Insight placeholder */}
-              {bestDeal && worstDeal && bestDeal.offer_id !== worstDeal.offer_id && (
-                <div className="border-t border-border/50 px-4 py-3">
+              {/* AI Insights */}
+              <div className="border-t border-border/50 px-4 py-3">
+                {insightsLoading ? (
+                  <div className="flex items-center gap-2 rounded-lg bg-muted/50 p-3">
+                    <Loader2 className="h-4 w-4 shrink-0 animate-spin text-primary" />
+                    <p className="text-xs text-muted-foreground">Generating insights…</p>
+                  </div>
+                ) : insights.length > 0 ? (
+                  <div className="space-y-2">
+                    {insights.map((insight, i) => (
+                      <div key={i} className="flex items-start gap-2 rounded-lg bg-muted/50 p-3">
+                        <Lightbulb className="mt-0.5 h-4 w-4 shrink-0 text-yellow-500" />
+                        <div className="flex-1">
+                          <p className="text-xs text-muted-foreground">
+                            <span className="font-semibold text-foreground">AI Insight:</span>{" "}
+                            {insight}
+                          </p>
+                        </div>
+                      </div>
+                    ))}
+                    {insightsUpdatedAt && (
+                      <p className="text-[10px] text-muted-foreground/60 pl-6">
+                        Last updated: {insightsUpdatedAt}
+                      </p>
+                    )}
+                  </div>
+                ) : (
                   <div className="flex items-start gap-2 rounded-lg bg-muted/50 p-3">
-                    <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+                    <Lightbulb className="mt-0.5 h-4 w-4 shrink-0 text-yellow-500/60" />
                     <p className="text-xs text-muted-foreground">
-                      <span className="font-semibold text-foreground">AI Insight:</span>{" "}
-                      <span className="font-medium text-emerald-500">{bestDeal.offer_name}</span> has the highest
-                      14-day return rate ({Math.round(bestDeal.return_rate_14d * 100)}%), bringing customers back{" "}
-                      {Math.round((bestDeal.return_rate_14d / worstDeal.return_rate_14d - 1) * 100)}% more often than{" "}
-                      <span className="font-medium text-red-400">{worstDeal.offer_name}</span> ({Math.round(worstDeal.return_rate_14d * 100)}%).
-                      Consider increasing the daily cap on your top performer.
+                      <span className="font-semibold text-foreground">Tip:</span>{" "}
+                      Add more deals and track redemptions to unlock personalized AI insights about your business.
                     </p>
                   </div>
-                </div>
-              )}
+                )}
+              </div>
             </CardContent>
           </Card>
 
