@@ -9,8 +9,9 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import { Checkbox } from "@/components/ui/checkbox"
+import { Textarea } from "@/components/ui/textarea"
 import { useAuth } from "@/lib/auth-context"
-import { ArrowLeft, Stamp, Save, Loader2 } from "lucide-react"
+import { ArrowLeft, Stamp, Save, Loader2, MessageSquare } from "lucide-react"
 
 // Day labels (0=Monday .. 6=Sunday)
 const DAYS = [
@@ -47,14 +48,67 @@ const DEFAULT_FORM: LoyaltyFormData = {
   birthday_reward: false,
 }
 
+// --- Automation types ---
+interface AutomationRule {
+  trigger: "first_visit" | "at_risk" | "reward_earned"
+  enabled: boolean
+  message_template: string
+  at_risk_days: number
+}
+
+const DEFAULT_AUTOMATIONS: AutomationRule[] = [
+  {
+    trigger: "first_visit",
+    enabled: false,
+    message_template:
+      "Thanks for visiting {merchant_name}! You earned your first stamp. {stamps_remaining} more visits → {reward_description} 🎉",
+    at_risk_days: 14,
+  },
+  {
+    trigger: "at_risk",
+    enabled: false,
+    message_template:
+      "We miss you at {merchant_name}! Here's a deal waiting for you. Your stamp card: {current_stamps}/{stamps_required} — so close!",
+    at_risk_days: 14,
+  },
+  {
+    trigger: "reward_earned",
+    enabled: false,
+    message_template:
+      "🎉 You earned {reward_description} at {merchant_name}! Show this at the register. Valid for 30 days.",
+    at_risk_days: 14,
+  },
+]
+
+const TRIGGER_LABELS: Record<string, { title: string; description: string; placeholders: string }> = {
+  first_visit: {
+    title: "First Visit",
+    description: "Sent after a customer's very first visit to your business",
+    placeholders: "{merchant_name}, {customer_name}, {stamps_remaining}, {reward_description}",
+  },
+  at_risk: {
+    title: "At-Risk Re-engagement",
+    description: "Sent to customers who haven't visited in a while",
+    placeholders: "{merchant_name}, {customer_name}, {current_stamps}, {stamps_required}",
+  },
+  reward_earned: {
+    title: "Reward Earned",
+    description: "Sent when a customer earns a reward from their stamp card",
+    placeholders: "{merchant_name}, {customer_name}, {reward_description}",
+  },
+}
+
 export default function LoyaltyConfigPage() {
   const { role } = useAuth()
   const isAdmin = role === "merchant_admin"
 
   const [form, setForm] = useState<LoyaltyFormData>(DEFAULT_FORM)
+  const [automations, setAutomations] = useState<AutomationRule[]>(DEFAULT_AUTOMATIONS)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
+  const [savingAutomations, setSavingAutomations] = useState(false)
+  const [savedAutomations, setSavedAutomations] = useState(false)
 
   // Load existing config on mount (mock)
   useEffect(() => {
@@ -84,6 +138,30 @@ export default function LoyaltyConfigPage() {
     setSaving(false)
     setSaved(true)
     setTimeout(() => setSaved(false), 3000)
+  }
+
+  const handleSaveAutomations = async () => {
+    setSavingAutomations(true)
+    setSavedAutomations(false)
+
+    // TODO: Replace with real API call
+    // await fetch(`/api/v1/merchants/${MOCK_MERCHANT_ID}/automations`, {
+    //   method: "PUT",
+    //   headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    //   body: JSON.stringify({ rules: automations }),
+    // })
+
+    // Mock save
+    await new Promise((r) => setTimeout(r, 600))
+    setSavingAutomations(false)
+    setSavedAutomations(true)
+    setTimeout(() => setSavedAutomations(false), 3000)
+  }
+
+  const updateAutomationRule = (trigger: string, updates: Partial<AutomationRule>) => {
+    setAutomations((prev) =>
+      prev.map((rule) => (rule.trigger === trigger ? { ...rule, ...updates } : rule))
+    )
   }
 
   const toggleDoubleDay = (day: number) => {
@@ -344,6 +422,121 @@ export default function LoyaltyConfigPage() {
                 </p>
               )}
             </div>
+          </CardContent>
+        </Card>
+
+        {/* Automated Messages Section */}
+        <Card className="mt-6 border-border bg-card">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-lg text-card-foreground">
+              <MessageSquare className="h-5 w-5" />
+              Automated Messages
+            </CardTitle>
+            <CardDescription>
+              Set up automated SMS messages for key customer moments. Messages are
+              queued and sent during business hours (9 AM – 9 PM).
+            </CardDescription>
+          </CardHeader>
+
+          <CardContent className="space-y-6">
+            {automations.map((rule) => {
+              const meta = TRIGGER_LABELS[rule.trigger]
+              return (
+                <div
+                  key={rule.trigger}
+                  className="rounded-lg border border-border p-4 space-y-3"
+                >
+                  {/* Toggle row */}
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <Label className="text-sm font-medium">{meta.title}</Label>
+                      <p className="text-xs text-muted-foreground">{meta.description}</p>
+                    </div>
+                    <Switch
+                      checked={rule.enabled}
+                      onCheckedChange={(checked) =>
+                        updateAutomationRule(rule.trigger, { enabled: checked })
+                      }
+                      disabled={!isAdmin}
+                    />
+                  </div>
+
+                  {/* Template textarea (visible even when disabled, for preview) */}
+                  <div className="space-y-1.5">
+                    <Label className="text-xs text-muted-foreground">Message template</Label>
+                    <Textarea
+                      value={rule.message_template}
+                      onChange={(e) =>
+                        updateAutomationRule(rule.trigger, {
+                          message_template: e.target.value,
+                        })
+                      }
+                      rows={3}
+                      className="border-border bg-secondary text-sm"
+                      disabled={!isAdmin}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Placeholders: {meta.placeholders}
+                    </p>
+                  </div>
+
+                  {/* At-risk days threshold */}
+                  {rule.trigger === "at_risk" && (
+                    <div className="space-y-1.5">
+                      <Label className="text-xs text-muted-foreground">
+                        Days without visit before sending
+                      </Label>
+                      <Input
+                        type="number"
+                        min={1}
+                        max={90}
+                        value={rule.at_risk_days}
+                        onChange={(e) =>
+                          updateAutomationRule(rule.trigger, {
+                            at_risk_days: Math.max(1, parseInt(e.target.value) || 14),
+                          })
+                        }
+                        className="border-border bg-secondary w-24"
+                        disabled={!isAdmin}
+                      />
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+
+            {/* Save Automations Button */}
+            {isAdmin && (
+              <Button
+                className="w-full gap-2"
+                variant="outline"
+                onClick={handleSaveAutomations}
+                disabled={savingAutomations}
+              >
+                {savingAutomations ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Saving…
+                  </>
+                ) : savedAutomations ? (
+                  <>
+                    <Save className="h-4 w-4" />
+                    Saved!
+                  </>
+                ) : (
+                  <>
+                    <Save className="h-4 w-4" />
+                    Save Automations
+                  </>
+                )}
+              </Button>
+            )}
+
+            {!isAdmin && (
+              <p className="text-center text-sm text-muted-foreground">
+                Only merchant admins can edit automation settings.
+              </p>
+            )}
           </CardContent>
         </Card>
       </main>

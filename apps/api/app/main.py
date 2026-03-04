@@ -39,10 +39,14 @@ from .auth import (
     get_user_by_email,
     can_delete_user,
 )
+from .analytics import router as analytics_router
 from .consumer import router as consumer_router
 from .consumer import parse_personal_qr
+from .automations import router as automations_router
+from .automations import create_automated_message
+from .customers import router as customers_router
 from .loyalty import router as loyalty_router
-from .db import get_db, MERCHANTS, OFFERS, TOKENS, REDEMPTIONS, LEDGER, USERS, PENDING_ROLES, CONSUMERS, CONSUMER_VISITS, CONSUMER_CLAIMS, LOYALTY_CONFIGS, LOYALTY_PROGRESS, REWARDS
+from .db import get_db, MERCHANTS, OFFERS, TOKENS, REDEMPTIONS, LEDGER, USERS, PENDING_ROLES, CONSUMERS, CONSUMER_VISITS, CONSUMER_CLAIMS, LOYALTY_CONFIGS, LOYALTY_PROGRESS, REWARDS, AUTOMATED_MESSAGES
 from .deps import get_current_user
 from .models import (
     MerchantCreate,
@@ -135,6 +139,15 @@ app.include_router(consumer_router, prefix="/api/v1")
 
 # --- Loyalty Router ---
 app.include_router(loyalty_router, prefix="/api/v1")
+
+# --- Customers Router ---
+app.include_router(customers_router, prefix="/api/v1")
+
+# --- Automations Router ---
+app.include_router(automations_router, prefix="/api/v1")
+
+# --- Analytics Router ---
+app.include_router(analytics_router, prefix="/api/v1")
 
 
 def get_merchant_id_from_user(user: dict) -> Optional[str]:
@@ -1075,6 +1088,90 @@ async def redeem_token(request: Request, data: RedeemRequest, user=Depends(get_c
         )
         if claim_docs:
             claim_docs[0].reference.update({"redeemed": True})
+
+        # --- Attribution: mark recent automated messages as resulted_in_visit ---
+        seven_days_ago = now - timedelta(days=7)
+        try:
+            recent_auto_msgs = list(
+                db.collection(AUTOMATED_MESSAGES)
+                .where("merchant_id", "==", merchant_id)
+                .where("consumer_id", "==", consumer_uid)
+                .where("resulted_in_visit", "==", False)
+                .where("sent_at", ">=", seven_days_ago)
+                .stream()
+            )
+            for msg_doc in recent_auto_msgs:
+                msg_doc.reference.update({"resulted_in_visit": True})
+        except Exception as e:
+            logger.warning("Attribution tracking failed: %s", e)
+
+        # --- Automation triggers: first_visit & reward_earned ---
+        try:
+            # Get consumer phone for SMS
+            _consumer_phone = None
+            if consumer_doc.exists:
+                _consumer_phone = consumer_doc.to_dict().get("phone")
+
+            # Get merchant name for templates
+            _merchant_doc = db.collection(MERCHANTS).document(merchant_id).get()
+            _merchant_name = _merchant_doc.to_dict().get("name", "Local Business") if _merchant_doc.exists else "Local Business"
+
+            # Load automation rules
+            _automations_raw = []
+            if loyalty_doc.exists:
+                _automations_raw = loyalty_doc.to_dict().get("automations", [])
+
+            _auto_rules = {r["trigger"]: r for r in _automations_raw if r.get("enabled")}
+
+            # Get loyalty info for template placeholders
+            _lconfig = loyalty_doc.to_dict() if loyalty_doc.exists else {}
+            _stamps_required = _lconfig.get("stamps_required", 10)
+            _reward_desc = _lconfig.get("reward_description", "a reward")
+            _final_progress_doc = db.collection(LOYALTY_PROGRESS).document(f"{consumer_uid}_{merchant_id}").get()
+            _current_stamps = _final_progress_doc.to_dict().get("current_stamps", 0) if _final_progress_doc.exists else 0
+
+            _template_vars = {
+                "merchant_name": _merchant_name,
+                "customer_name": consumer_name or "there",
+                "reward_description": _reward_desc,
+                "current_stamps": _current_stamps,
+                "stamps_required": _stamps_required,
+                "stamps_remaining": max(0, _stamps_required - _current_stamps),
+            }
+
+            # First visit trigger
+            if visit_number == 1 and "first_visit" in _auto_rules:
+                _tpl = _auto_rules["first_visit"].get("message_template", "")
+                try:
+                    _msg = _tpl.format(**_template_vars)
+                except (KeyError, IndexError):
+                    _msg = _tpl
+                create_automated_message(
+                    db=db,
+                    merchant_id=merchant_id,
+                    consumer_id=consumer_uid,
+                    trigger="first_visit",
+                    message_body=_msg,
+                    consumer_phone=_consumer_phone,
+                )
+
+            # Reward earned trigger
+            if reward_earned_msg is not None and "reward_earned" in _auto_rules:
+                _tpl = _auto_rules["reward_earned"].get("message_template", "")
+                try:
+                    _msg = _tpl.format(**_template_vars)
+                except (KeyError, IndexError):
+                    _msg = _tpl
+                create_automated_message(
+                    db=db,
+                    merchant_id=merchant_id,
+                    consumer_id=consumer_uid,
+                    trigger="reward_earned",
+                    message_body=_msg,
+                    consumer_phone=_consumer_phone,
+                )
+        except Exception as e:
+            logger.warning("Automation trigger failed: %s", e)
 
         # Build loyalty fields for the response
         resp_stamp_progress = None

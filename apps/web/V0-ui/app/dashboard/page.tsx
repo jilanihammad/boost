@@ -4,16 +4,9 @@ import { useState } from "react"
 import Link from "next/link"
 import { BoostLogo } from "@/components/boost-logo"
 import { RoleToggle } from "@/components/role-toggle"
-import { StatusBadge } from "@/components/status-badge"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
 import {
   Table,
   TableBody,
@@ -24,68 +17,62 @@ import {
 } from "@/components/ui/table"
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog"
+import { StatusBadge } from "@/components/status-badge"
 import { useAuth } from "@/lib/auth-context"
 import {
   merchant,
   offers,
-  metrics,
-  redemptions,
-  redemptionsByDay,
-  methodSplit,
   type Offer,
 } from "@/lib/mock-data"
+import {
+  retentionKpis,
+  cohortData,
+  dealPerformance,
+  recentActivity,
+  billingMetrics,
+  type DealPerf,
+} from "@/lib/retention-mock-data"
 import {
   QrCode,
   LogOut,
   Plus,
-  Pause,
-  Edit,
-  TrendingUp,
-  DollarSign,
-  Activity,
-  Calendar,
   Menu,
-  ChevronRight,
-  Scan,
-  Keyboard,
-  CheckCircle,
-  XCircle,
-  Upload,
-  Sparkles,
   Settings,
   ChevronUp,
   ChevronDown,
+  Users,
+  TrendingUp,
+  TrendingDown,
+  ArrowUpRight,
+  ArrowDownRight,
+  DollarSign,
+  Calendar,
+  Activity,
+  Upload,
+  Sparkles,
+  Heart,
 } from "lucide-react"
-import {
-  Bar,
-  BarChart,
-  XAxis,
-  YAxis,
-  Tooltip,
-  ResponsiveContainer,
-  PieChart,
-  Pie,
-  Cell,
-} from "recharts"
+
+// --- Heatmap cell color helper ---
+function retentionColor(rate: number): string {
+  if (rate >= 0.4) return "bg-emerald-600/80 text-white"
+  if (rate >= 0.2) return "bg-yellow-600/70 text-white"
+  return "bg-red-600/60 text-white"
+}
+
+// --- Sort key type for deals table ---
+type DealSortKey = "offer_name" | "redemption_count" | "return_rate_14d" | "estimated_roi"
 
 export default function DashboardPage() {
   const { role } = useAuth()
   const [selectedOffer, setSelectedOffer] = useState<Offer>(offers[0])
-  const [dateRange, setDateRange] = useState("7d")
-  const [location, setLocation] = useState("all")
-  const [offerFilter, setOfferFilter] = useState("all")
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [dealSort, setDealSort] = useState<{ key: DealSortKey; asc: boolean }>({
+    key: "return_rate_14d",
+    asc: false,
+  })
 
   const isAdmin = role === "merchant_admin"
-
-  const activeOffer = offers.find((o) => o.status === "running")
 
   const offersListRef = { current: null as HTMLDivElement | null }
 
@@ -99,12 +86,34 @@ export default function DashboardPage() {
     }
   }
 
+  // Sort deals
+  const sortedDeals = [...dealPerformance].sort((a, b) => {
+    const va = a[dealSort.key]
+    const vb = b[dealSort.key]
+    if (typeof va === "string" && typeof vb === "string") {
+      return dealSort.asc ? va.localeCompare(vb) : vb.localeCompare(va)
+    }
+    return dealSort.asc
+      ? (va as number) - (vb as number)
+      : (vb as number) - (va as number)
+  })
+
+  const bestDeal = sortedDeals.reduce<DealPerf | null>((best, d) =>
+    !best || d.return_rate_14d > best.return_rate_14d ? d : best, null)
+  const worstDeal = sortedDeals.reduce<DealPerf | null>((worst, d) =>
+    !worst || d.return_rate_14d < worst.return_rate_14d ? d : worst, null)
+
+  const toggleSort = (key: DealSortKey) => {
+    setDealSort((prev) =>
+      prev.key === key ? { key, asc: !prev.asc } : { key, asc: false }
+    )
+  }
+
   const OffersList = () => (
     <div className="flex h-full flex-col">
       <div className="border-b border-sidebar-border p-4">
         <h2 className="text-sm font-semibold text-sidebar-foreground">Offers</h2>
       </div>
-      {/* Scroll up button */}
       <button
         type="button"
         onClick={() => scrollOffers("up")}
@@ -114,37 +123,25 @@ export default function DashboardPage() {
         <ChevronUp className="h-4 w-4" />
       </button>
       <div
-        ref={(el) => {
-          offersListRef.current = el
-        }}
+        ref={(el) => { offersListRef.current = el }}
         className="flex-1 overflow-y-auto p-2"
       >
         {offers.map((offer) => (
           <button
             key={offer.id}
-            onClick={() => {
-              setSelectedOffer(offer)
-              setSidebarOpen(false)
-            }}
+            onClick={() => { setSelectedOffer(offer); setSidebarOpen(false) }}
             className={`mb-1 w-full rounded-lg p-3 text-left transition-colors ${
-              selectedOffer.id === offer.id
-                ? "bg-sidebar-accent"
-                : "hover:bg-sidebar-accent/50"
+              selectedOffer.id === offer.id ? "bg-sidebar-accent" : "hover:bg-sidebar-accent/50"
             }`}
           >
             <div className="flex items-start justify-between gap-2">
-              <span className="text-sm font-medium text-sidebar-foreground">
-                {offer.name}
-              </span>
+              <span className="text-sm font-medium text-sidebar-foreground">{offer.name}</span>
               <StatusBadge status={offer.status} />
             </div>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Today: {offer.today_redemptions}
-            </p>
+            <p className="mt-1 text-xs text-muted-foreground">Today: {offer.today_redemptions}</p>
           </button>
         ))}
       </div>
-      {/* Scroll down button */}
       <button
         type="button"
         onClick={() => scrollOffers("down")}
@@ -161,32 +158,18 @@ export default function DashboardPage() {
           </Button>
           <Popover>
             <PopoverTrigger asChild>
-              <Button
-                variant="outline"
-                size="icon"
-                className="h-9 w-9 shrink-0 border-sidebar-border bg-transparent text-sidebar-foreground hover:bg-sidebar-accent"
-              >
+              <Button variant="outline" size="icon" className="h-9 w-9 shrink-0 border-sidebar-border bg-transparent text-sidebar-foreground hover:bg-sidebar-accent">
                 <Settings className="h-4 w-4" />
                 <span className="sr-only">Offer settings</span>
               </Button>
             </PopoverTrigger>
-            <PopoverContent
-              side="top"
-              align="end"
-              className="w-48 border-border bg-popover p-2"
-            >
+            <PopoverContent side="top" align="end" className="w-48 border-border bg-popover p-2">
               <div className="space-y-1">
-                <Button
-                  variant="ghost"
-                  className="w-full justify-start gap-2 text-sm text-popover-foreground hover:bg-accent"
-                >
+                <Button variant="ghost" className="w-full justify-start gap-2 text-sm text-popover-foreground hover:bg-accent">
                   <Upload className="h-4 w-4" />
                   Upload Menu
                 </Button>
-                <Button
-                  variant="ghost"
-                  className="w-full justify-start gap-2 text-sm text-popover-foreground hover:bg-accent"
-                >
+                <Button variant="ghost" className="w-full justify-start gap-2 text-sm text-popover-foreground hover:bg-accent">
                   <Sparkles className="h-4 w-4" />
                   Suggest Offer
                 </Button>
@@ -229,43 +212,30 @@ export default function DashboardPage() {
           <div className="flex items-center gap-3">
             <Sheet open={sidebarOpen} onOpenChange={setSidebarOpen}>
               <SheetTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-8 w-8 lg:hidden"
-                >
+                <Button variant="ghost" size="icon" className="h-8 w-8 lg:hidden">
                   <Menu className="h-5 w-5" />
                   <span className="sr-only">Toggle menu</span>
                 </Button>
               </SheetTrigger>
             </Sheet>
-            <div className="lg:hidden">
-              <BoostLogo />
-            </div>
-            <span className="hidden text-sm text-muted-foreground lg:inline">
-              {merchant.name}
-            </span>
+            <div className="lg:hidden"><BoostLogo /></div>
+            <span className="hidden text-sm text-muted-foreground lg:inline">{merchant.name}</span>
           </div>
-
           <div className="flex items-center gap-2">
-            <Button
-              variant="ghost"
-              size="sm"
-              asChild
-              className="h-8 gap-1.5 text-xs text-muted-foreground hover:text-foreground"
-            >
+            <Button variant="ghost" size="sm" asChild className="h-8 gap-1.5 text-xs text-muted-foreground hover:text-foreground">
+              <Link href="/biz/customers">
+                <Users className="h-4 w-4" />
+                <span className="hidden sm:inline">Customers</span>
+              </Link>
+            </Button>
+            <Button variant="ghost" size="sm" asChild className="h-8 gap-1.5 text-xs text-muted-foreground hover:text-foreground">
               <Link href="/redeem">
                 <QrCode className="h-4 w-4" />
                 <span className="hidden sm:inline">Redeem</span>
               </Link>
             </Button>
             <RoleToggle />
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8 text-muted-foreground hover:text-foreground"
-              asChild
-            >
+            <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-foreground" asChild>
               <Link href="/login">
                 <LogOut className="h-4 w-4" />
                 <span className="sr-only">Sign out</span>
@@ -276,461 +246,325 @@ export default function DashboardPage() {
 
         {/* Dashboard Content */}
         <main className="flex-1 overflow-y-auto p-4 lg:p-6">
-          {/* KPI Tiles */}
+
+          {/* ===================== RETENTION KPI CARDS ===================== */}
           <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <Card className="border-border bg-card">
-              <CardHeader className="flex flex-row items-center justify-between pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground">
-                  Today{"'"}s Redemptions
-                </CardTitle>
-                <TrendingUp className="h-4 w-4 text-muted-foreground" />
-              </CardHeader>
-              <CardContent>
-                <p className="text-3xl font-bold text-card-foreground">
-                  {metrics.today_redemptions}
-                </p>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  +12% from yesterday
-                </p>
-              </CardContent>
-            </Card>
-
-            <Card className="border-border bg-card">
-              <CardHeader className="flex flex-row items-center justify-between pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground">
-                  Week-to-Date
-                </CardTitle>
-                <Calendar className="h-4 w-4 text-muted-foreground" />
-              </CardHeader>
-              <CardContent>
-                <p className="text-3xl font-bold text-card-foreground">
-                  {metrics.wtd_redemptions}
-                </p>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  +8% from last week
-                </p>
-              </CardContent>
-            </Card>
-
-            <Card className="border-border bg-card">
-              <CardHeader className="flex flex-row items-center justify-between pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground">
-                  Amount Owed (WTD)
-                </CardTitle>
-                <DollarSign className="h-4 w-4 text-muted-foreground" />
-              </CardHeader>
-              <CardContent>
-                <p className="text-3xl font-bold text-card-foreground">
-                  ${metrics.amount_owed_wtd.toFixed(2)}
-                </p>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  Based on verified redemptions
-                </p>
-              </CardContent>
-            </Card>
-
-            <Card className="border-border bg-card">
-              <CardHeader className="flex flex-row items-center justify-between pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground">
-                  Active Offer Status
-                </CardTitle>
-                <Activity className="h-4 w-4 text-muted-foreground" />
-              </CardHeader>
-              <CardContent>
-                {activeOffer ? (
-                  <>
-                    <div className="flex items-center gap-2">
-                      <StatusBadge status={activeOffer.status} />
-                    </div>
-                    <p className="mt-2 text-sm font-medium text-card-foreground">
-                      {activeOffer.cap_remaining_today} of {activeOffer.cap_total_daily}{" "}
-                      left today
+            {retentionKpis.map((kpi) => {
+              const isPositive = kpi.delta >= 0
+              return (
+                <Card key={kpi.label} className="border-border bg-card">
+                  <CardHeader className="flex flex-row items-center justify-between pb-2">
+                    <CardTitle className="text-sm font-medium text-muted-foreground">
+                      {kpi.label}
+                    </CardTitle>
+                    {isPositive ? (
+                      <ArrowUpRight className="h-4 w-4 text-emerald-500" />
+                    ) : (
+                      <ArrowDownRight className="h-4 w-4 text-red-500" />
+                    )}
+                  </CardHeader>
+                  <CardContent>
+                    <p className="text-3xl font-bold text-card-foreground">
+                      {kpi.prefix ?? ""}{kpi.value}{kpi.suffix ?? ""}
                     </p>
-                  </>
-                ) : (
-                  <p className="text-sm text-muted-foreground">No active offers</p>
-                )}
-              </CardContent>
-            </Card>
+                    <p className={`mt-1 text-xs ${isPositive ? "text-emerald-500" : "text-red-500"}`}>
+                      {isPositive ? "+" : ""}{kpi.delta}{kpi.suffix === "%" ? "pp" : ""} {kpi.deltaLabel}
+                    </p>
+                  </CardContent>
+                </Card>
+              )
+            })}
           </div>
 
-          {/* Filter Row */}
-          <div className="mb-6 flex flex-wrap items-center gap-3">
-            <Select value={dateRange} onValueChange={setDateRange}>
-              <SelectTrigger className="h-9 w-[120px] border-border bg-secondary text-sm">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="today">Today</SelectItem>
-                <SelectItem value="7d">Last 7 days</SelectItem>
-                <SelectItem value="30d">Last 30 days</SelectItem>
-                <SelectItem value="custom">Custom</SelectItem>
-              </SelectContent>
-            </Select>
-
-            <Select value={location} onValueChange={setLocation}>
-              <SelectTrigger className="h-9 w-[140px] border-border bg-secondary text-sm">
-                <SelectValue placeholder="Location" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All locations</SelectItem>
-                {merchant.locations.map((loc) => (
-                  <SelectItem key={loc} value={loc.toLowerCase()}>
-                    {loc}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-
-            <Select value={offerFilter} onValueChange={setOfferFilter}>
-              <SelectTrigger className="h-9 w-[160px] border-border bg-secondary text-sm">
-                <SelectValue placeholder="Offer" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All offers</SelectItem>
-                {offers.map((offer) => (
-                  <SelectItem key={offer.id} value={offer.id}>
-                    {offer.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          {/* Selected Offer Details */}
+          {/* ===================== RETENTION HEATMAP ===================== */}
           <Card className="mb-6 border-border bg-card">
             <CardHeader>
-              <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-                <div>
-                  <div className="flex items-center gap-3">
-                    <CardTitle className="text-lg text-card-foreground">
-                      {selectedOffer.name}
-                    </CardTitle>
-                    <StatusBadge status={selectedOffer.status} />
-                  </div>
-                  <CardDescription className="mt-1">
-                    {selectedOffer.terms}
-                  </CardDescription>
-                </div>
-                {isAdmin && (
-                  <div className="flex gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="h-8 gap-1.5 border-border bg-transparent text-sm"
-                    >
-                      <Pause className="h-4 w-4" />
-                      Pause
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="h-8 gap-1.5 border-border bg-transparent text-sm"
-                    >
-                      <Edit className="h-4 w-4" />
-                      Edit
-                    </Button>
-                  </div>
-                )}
-              </div>
+              <CardTitle className="text-sm font-medium text-card-foreground">
+                Cohort Retention Heatmap
+              </CardTitle>
+              <CardDescription>
+                Are your customers coming back? Rows = weekly cohorts, columns = return week.
+              </CardDescription>
             </CardHeader>
-            <CardContent>
-              <div className="grid gap-4 sm:grid-cols-3">
-                <div className="rounded-lg bg-muted/50 p-3">
-                  <p className="text-xs text-muted-foreground">Daily Cap</p>
-                  <p className="mt-1 text-lg font-semibold text-foreground">
-                    {selectedOffer.cap_remaining_today} / {selectedOffer.cap_total_daily}
-                  </p>
-                  <p className="text-xs text-muted-foreground">remaining today</p>
+            <CardContent className="p-0">
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-border">
+                      <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground">
+                        Cohort Week
+                      </th>
+                      <th className="px-4 py-3 text-center text-xs font-medium text-muted-foreground">
+                        New
+                      </th>
+                      {[1, 2, 3, 4, 5].map((w) => (
+                        <th key={w} className="px-4 py-3 text-center text-xs font-medium text-muted-foreground">
+                          Wk {w}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {cohortData.map((row) => (
+                      <tr key={row.week_start} className="border-b border-border/50">
+                        <td className="px-4 py-2 text-xs text-foreground font-medium">
+                          {row.week_start}
+                        </td>
+                        <td className="px-4 py-2 text-center text-xs text-muted-foreground">
+                          {row.new_customers}
+                        </td>
+                        {[0, 1, 2, 3, 4].map((i) => (
+                          <td key={i} className="px-2 py-2 text-center">
+                            {row.retention_rates[i] !== undefined ? (
+                              <span
+                                className={`inline-block rounded px-2 py-1 text-xs font-semibold ${retentionColor(row.retention_rates[i])}`}
+                              >
+                                {Math.round(row.retention_rates[i] * 100)}%
+                              </span>
+                            ) : (
+                              <span className="text-xs text-muted-foreground/40">—</span>
+                            )}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {/* Legend */}
+              <div className="flex items-center gap-4 border-t border-border/50 px-4 py-2">
+                <span className="text-xs text-muted-foreground">Legend:</span>
+                <div className="flex items-center gap-1">
+                  <span className="inline-block h-3 w-3 rounded bg-emerald-600/80" />
+                  <span className="text-xs text-muted-foreground">&gt;40%</span>
                 </div>
-                <div className="rounded-lg bg-muted/50 p-3">
-                  <p className="text-xs text-muted-foreground">Active Hours</p>
-                  <p className="mt-1 text-lg font-semibold text-foreground">
-                    {selectedOffer.hours}
-                  </p>
+                <div className="flex items-center gap-1">
+                  <span className="inline-block h-3 w-3 rounded bg-yellow-600/70" />
+                  <span className="text-xs text-muted-foreground">20–40%</span>
                 </div>
-                <div className="rounded-lg bg-muted/50 p-3">
-                  <p className="text-xs text-muted-foreground">Discount Value</p>
-                  <p className="mt-1 text-lg font-semibold text-foreground">
-                    {selectedOffer.discount_text}
-                  </p>
+                <div className="flex items-center gap-1">
+                  <span className="inline-block h-3 w-3 rounded bg-red-600/60" />
+                  <span className="text-xs text-muted-foreground">&lt;20%</span>
                 </div>
               </div>
             </CardContent>
           </Card>
 
-          {/* Charts */}
-          <div className="mb-6 grid gap-6 lg:grid-cols-3">
-            {/* Redemptions by Day Chart */}
-            <Card className="border-border bg-card lg:col-span-2">
-              <CardHeader>
-                <CardTitle className="text-sm font-medium text-card-foreground">
-                  Redemptions by Day
-                </CardTitle>
-                <CardDescription>Last 14 days</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="h-[200px]">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={redemptionsByDay}>
-                      <XAxis
-                        dataKey="day"
-                        tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }}
-                        tickLine={false}
-                        axisLine={false}
-                      />
-                      <YAxis
-                        tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }}
-                        tickLine={false}
-                        axisLine={false}
-                        width={30}
-                      />
-                      <Tooltip
-                        contentStyle={{
-                          backgroundColor: "hsl(var(--popover))",
-                          border: "1px solid hsl(var(--border))",
-                          borderRadius: "8px",
-                          color: "hsl(var(--popover-foreground))",
-                        }}
-                        labelStyle={{ color: "hsl(var(--popover-foreground))" }}
-                      />
-                      <Bar
-                        dataKey="count"
-                        fill="oklch(0.72 0.15 195)"
-                        radius={[4, 4, 0, 0]}
-                      />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* Method Split Chart */}
-            <Card className="border-border bg-card">
-              <CardHeader>
-                <CardTitle className="text-sm font-medium text-card-foreground">
-                  Redemption Method
-                </CardTitle>
-                <CardDescription>Scan vs Manual</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="flex h-[200px] items-center justify-center">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                      <Pie
-                        data={methodSplit}
-                        cx="50%"
-                        cy="50%"
-                        innerRadius={50}
-                        outerRadius={70}
-                        paddingAngle={4}
-                        dataKey="value"
-                      >
-                        {methodSplit.map((entry, index) => (
-                          <Cell key={`cell-${index}`} fill={entry.fill} />
-                        ))}
-                      </Pie>
-                      <Tooltip
-                        contentStyle={{
-                          backgroundColor: "hsl(var(--popover))",
-                          border: "1px solid hsl(var(--border))",
-                          borderRadius: "8px",
-                          color: "hsl(var(--popover-foreground))",
-                        }}
-                        formatter={(value: number) => [`${value}%`, "Percentage"]}
-                      />
-                    </PieChart>
-                  </ResponsiveContainer>
-                </div>
-                <div className="mt-2 flex justify-center gap-6">
-                  <div className="flex items-center gap-2">
-                    <div
-                      className="h-3 w-3 rounded-full"
-                      style={{ backgroundColor: "oklch(0.72 0.15 195)" }}
-                    />
-                    <span className="text-xs text-muted-foreground">Scan (78%)</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <div
-                      className="h-3 w-3 rounded-full"
-                      style={{ backgroundColor: "oklch(0.7 0.15 85)" }}
-                    />
-                    <span className="text-xs text-muted-foreground">Manual (22%)</span>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-
-          {/* Recent Redemptions Table */}
-          <Card className="border-border bg-card">
+          {/* ===================== DEALS PERFORMANCE TABLE ===================== */}
+          <Card className="mb-6 border-border bg-card">
             <CardHeader>
               <CardTitle className="text-sm font-medium text-card-foreground">
-                Recent Redemptions
+                Active Deals Performance
               </CardTitle>
+              <CardDescription>
+                Compare which deals bring customers back.
+              </CardDescription>
             </CardHeader>
             <CardContent className="p-0">
               <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
                     <TableRow className="border-border hover:bg-transparent">
-                      <TableHead className="text-xs text-muted-foreground">
-                        Time
+                      <TableHead
+                        className="cursor-pointer text-xs text-muted-foreground hover:text-foreground"
+                        onClick={() => toggleSort("offer_name")}
+                      >
+                        Deal {dealSort.key === "offer_name" ? (dealSort.asc ? "↑" : "↓") : ""}
                       </TableHead>
-                      <TableHead className="text-xs text-muted-foreground">
-                        Offer
+                      <TableHead
+                        className="cursor-pointer text-center text-xs text-muted-foreground hover:text-foreground"
+                        onClick={() => toggleSort("redemption_count")}
+                      >
+                        Redemptions {dealSort.key === "redemption_count" ? (dealSort.asc ? "↑" : "↓") : ""}
                       </TableHead>
-                      <TableHead className="text-xs text-muted-foreground">
-                        Method
+                      <TableHead
+                        className="cursor-pointer text-center text-xs text-muted-foreground hover:text-foreground"
+                        onClick={() => toggleSort("return_rate_14d")}
+                      >
+                        Return % (14d) {dealSort.key === "return_rate_14d" ? (dealSort.asc ? "↑" : "↓") : ""}
                       </TableHead>
-                      <TableHead className="text-xs text-muted-foreground">
-                        Value
-                      </TableHead>
-                      <TableHead className="text-xs text-muted-foreground">
-                        Status
+                      <TableHead
+                        className="cursor-pointer text-center text-xs text-muted-foreground hover:text-foreground"
+                        onClick={() => toggleSort("estimated_roi")}
+                      >
+                        ROI {dealSort.key === "estimated_roi" ? (dealSort.asc ? "↑" : "↓") : ""}
                       </TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {redemptions.map((redemption) => (
-                      <TableRow
-                        key={redemption.id}
-                        className="border-border hover:bg-muted/50"
-                      >
-                        <TableCell className="text-sm text-foreground">
-                          {redemption.timestamp}
-                        </TableCell>
-                        <TableCell className="text-sm text-foreground">
-                          {redemption.offer_name}
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
-                            {redemption.method === "scan" ? (
-                              <>
-                                <Scan className="h-3.5 w-3.5" />
-                                <span>Scan</span>
-                              </>
-                            ) : (
-                              <>
-                                <Keyboard className="h-3.5 w-3.5" />
-                                <span>Manual</span>
-                              </>
-                            )}
-                          </div>
-                        </TableCell>
-                        <TableCell className="text-sm text-foreground">
-                          {redemption.discount_text}
-                        </TableCell>
-                        <TableCell>
-                          {redemption.status === "success" ? (
-                            <div className="flex items-center gap-1 text-success">
-                              <CheckCircle className="h-3.5 w-3.5" />
-                              <span className="text-xs">Success</span>
+                    {sortedDeals.map((deal) => {
+                      const isBest = bestDeal && deal.offer_id === bestDeal.offer_id
+                      return (
+                        <TableRow
+                          key={deal.offer_id}
+                          className={`border-border hover:bg-muted/50 ${isBest ? "bg-emerald-500/10" : ""}`}
+                        >
+                          <TableCell className="text-sm text-foreground">
+                            <div className="flex items-center gap-2">
+                              {deal.offer_name}
+                              {isBest && (
+                                <Badge variant="default" className="bg-emerald-600 text-xs">
+                                  Best
+                                </Badge>
+                              )}
                             </div>
-                          ) : (
-                            <div className="flex items-center gap-1 text-destructive">
-                              <XCircle className="h-3.5 w-3.5" />
-                              <span className="text-xs">Failed</span>
-                            </div>
-                          )}
-                        </TableCell>
-                      </TableRow>
-                    ))}
+                          </TableCell>
+                          <TableCell className="text-center text-sm text-foreground">
+                            {deal.redemption_count}
+                          </TableCell>
+                          <TableCell className="text-center text-sm">
+                            <span className={deal.return_rate_14d >= 0.5 ? "text-emerald-500" : "text-yellow-500"}>
+                              {Math.round(deal.return_rate_14d * 100)}%
+                            </span>
+                          </TableCell>
+                          <TableCell className="text-center text-sm">
+                            <span className={deal.estimated_roi >= 2 ? "text-emerald-500" : deal.estimated_roi >= 1 ? "text-yellow-500" : "text-red-500"}>
+                              {deal.estimated_roi.toFixed(1)}x
+                            </span>
+                          </TableCell>
+                        </TableRow>
+                      )
+                    })}
                   </TableBody>
                 </Table>
               </div>
-              <div className="flex items-center justify-center border-t border-border p-3">
-                <Dialog>
-                  <DialogTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="gap-1 text-xs text-muted-foreground"
-                    >
-                      View all redemptions
-                      <ChevronRight className="h-3 w-3" />
-                    </Button>
-                  </DialogTrigger>
-                  <DialogContent className="max-h-[80vh] max-w-4xl overflow-hidden border-border bg-card">
-                    <DialogHeader>
-                      <DialogTitle className="text-card-foreground">
-                        All Redemptions
-                      </DialogTitle>
-                    </DialogHeader>
-                    <div className="max-h-[60vh] overflow-y-auto">
-                      <Table>
-                        <TableHeader>
-                          <TableRow className="border-border hover:bg-transparent">
-                            <TableHead className="text-xs text-muted-foreground">
-                              Time
-                            </TableHead>
-                            <TableHead className="text-xs text-muted-foreground">
-                              Offer
-                            </TableHead>
-                            <TableHead className="text-xs text-muted-foreground">
-                              Method
-                            </TableHead>
-                            <TableHead className="text-xs text-muted-foreground">
-                              Value
-                            </TableHead>
-                            <TableHead className="text-xs text-muted-foreground">
-                              Status
-                            </TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {redemptions.map((redemption) => (
-                            <TableRow
-                              key={redemption.id}
-                              className="border-border hover:bg-muted/50"
-                            >
-                              <TableCell className="text-sm text-foreground">
-                                {redemption.timestamp}
-                              </TableCell>
-                              <TableCell className="text-sm text-foreground">
-                                {redemption.offer_name}
-                              </TableCell>
-                              <TableCell>
-                                <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
-                                  {redemption.method === "scan" ? (
-                                    <>
-                                      <Scan className="h-3.5 w-3.5" />
-                                      <span>Scan</span>
-                                    </>
-                                  ) : (
-                                    <>
-                                      <Keyboard className="h-3.5 w-3.5" />
-                                      <span>Manual</span>
-                                    </>
-                                  )}
-                                </div>
-                              </TableCell>
-                              <TableCell className="text-sm text-foreground">
-                                {redemption.discount_text}
-                              </TableCell>
-                              <TableCell>
-                                {redemption.status === "success" ? (
-                                  <div className="flex items-center gap-1 text-success">
-                                    <CheckCircle className="h-3.5 w-3.5" />
-                                    <span className="text-xs">Success</span>
-                                  </div>
-                                ) : (
-                                  <div className="flex items-center gap-1 text-destructive">
-                                    <XCircle className="h-3.5 w-3.5" />
-                                    <span className="text-xs">Failed</span>
-                                  </div>
-                                )}
-                              </TableCell>
-                            </TableRow>
-                          ))}
-                        </TableBody>
-                      </Table>
-                    </div>
-                  </DialogContent>
-                </Dialog>
+              {/* AI Insight placeholder */}
+              {bestDeal && worstDeal && bestDeal.offer_id !== worstDeal.offer_id && (
+                <div className="border-t border-border/50 px-4 py-3">
+                  <div className="flex items-start gap-2 rounded-lg bg-muted/50 p-3">
+                    <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+                    <p className="text-xs text-muted-foreground">
+                      <span className="font-semibold text-foreground">AI Insight:</span>{" "}
+                      <span className="font-medium text-emerald-500">{bestDeal.offer_name}</span> has the highest
+                      14-day return rate ({Math.round(bestDeal.return_rate_14d * 100)}%), bringing customers back{" "}
+                      {Math.round((bestDeal.return_rate_14d / worstDeal.return_rate_14d - 1) * 100)}% more often than{" "}
+                      <span className="font-medium text-red-400">{worstDeal.offer_name}</span> ({Math.round(worstDeal.return_rate_14d * 100)}%).
+                      Consider increasing the daily cap on your top performer.
+                    </p>
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* ===================== RECENT ACTIVITY + QUICK ACTIONS ===================== */}
+          <div className="mb-6 grid gap-6 lg:grid-cols-3">
+            {/* Recent Activity Feed */}
+            <Card className="border-border bg-card lg:col-span-2">
+              <CardHeader>
+                <CardTitle className="text-sm font-medium text-card-foreground">
+                  Recent Activity
+                </CardTitle>
+                <CardDescription>Last 10 redemptions</CardDescription>
+              </CardHeader>
+              <CardContent className="p-0">
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="border-border hover:bg-transparent">
+                        <TableHead className="text-xs text-muted-foreground">Time</TableHead>
+                        <TableHead className="text-xs text-muted-foreground">Customer</TableHead>
+                        <TableHead className="text-xs text-muted-foreground">Offer</TableHead>
+                        <TableHead className="text-center text-xs text-muted-foreground">Visit #</TableHead>
+                        <TableHead className="text-xs text-muted-foreground">Type</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {recentActivity.map((item) => (
+                        <TableRow key={item.id} className="border-border hover:bg-muted/50">
+                          <TableCell className="text-sm text-foreground">{item.time}</TableCell>
+                          <TableCell className="text-sm text-foreground">{item.customer_name}</TableCell>
+                          <TableCell className="text-sm text-muted-foreground">{item.offer_name}</TableCell>
+                          <TableCell className="text-center text-sm text-foreground">{item.visit_number}</TableCell>
+                          <TableCell>
+                            {item.customer_type === "NEW" ? (
+                              <Badge className="bg-blue-600 text-xs">NEW</Badge>
+                            ) : (
+                              <Badge variant="secondary" className="text-xs">Returning</Badge>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Quick Actions */}
+            <Card className="border-border bg-card">
+              <CardHeader>
+                <CardTitle className="text-sm font-medium text-card-foreground">
+                  Quick Actions
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <Button className="w-full justify-start gap-2" variant="outline" asChild>
+                  <Link href="/dashboard">
+                    <Plus className="h-4 w-4" />
+                    Create Deal
+                  </Link>
+                </Button>
+                <Button className="w-full justify-start gap-2" variant="outline" asChild>
+                  <Link href="/biz/customers">
+                    <Users className="h-4 w-4" />
+                    View Customers
+                  </Link>
+                </Button>
+                <Button className="w-full justify-start gap-2" variant="outline" asChild>
+                  <Link href="/biz/loyalty">
+                    <Heart className="h-4 w-4" />
+                    Configure Loyalty
+                  </Link>
+                </Button>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* ===================== BILLING SECTION (preserved) ===================== */}
+          <Card className="border-border bg-card">
+            <CardHeader>
+              <CardTitle className="text-sm font-medium text-card-foreground">
+                Billing & Financials
+              </CardTitle>
+              <CardDescription>Redemption costs and amounts owed</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="grid gap-4 sm:grid-cols-3">
+                <div className="rounded-lg bg-muted/50 p-4">
+                  <div className="flex items-center gap-2">
+                    <Activity className="h-4 w-4 text-muted-foreground" />
+                    <p className="text-xs text-muted-foreground">Today{"'"}s Redemptions</p>
+                  </div>
+                  <p className="mt-2 text-2xl font-bold text-foreground">
+                    {billingMetrics.today_redemptions}
+                  </p>
+                  <p className="text-xs text-muted-foreground">+12% from yesterday</p>
+                </div>
+                <div className="rounded-lg bg-muted/50 p-4">
+                  <div className="flex items-center gap-2">
+                    <Calendar className="h-4 w-4 text-muted-foreground" />
+                    <p className="text-xs text-muted-foreground">Week-to-Date</p>
+                  </div>
+                  <p className="mt-2 text-2xl font-bold text-foreground">
+                    {billingMetrics.wtd_redemptions}
+                  </p>
+                  <p className="text-xs text-muted-foreground">+8% from last week</p>
+                </div>
+                <div className="rounded-lg bg-muted/50 p-4">
+                  <div className="flex items-center gap-2">
+                    <DollarSign className="h-4 w-4 text-muted-foreground" />
+                    <p className="text-xs text-muted-foreground">Amount Owed (WTD)</p>
+                  </div>
+                  <p className="mt-2 text-2xl font-bold text-foreground">
+                    ${billingMetrics.amount_owed_wtd.toFixed(2)}
+                  </p>
+                  <p className="text-xs text-muted-foreground">Based on verified redemptions</p>
+                </div>
               </div>
             </CardContent>
           </Card>
+
         </main>
       </div>
     </div>

@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from enum import Enum
-from typing import Annotated, Optional
+from typing import Annotated, Literal, Optional
 
 from pydantic import BaseModel, EmailStr, Field
 
@@ -354,6 +354,62 @@ class RewardResponse(BaseModel):
     expires_at: Optional[datetime] = None
 
 
+# --- Customer Segmentation (Merchant-facing CRM) ---
+
+
+class CustomerSegment(str, Enum):
+    new = "new"
+    returning = "returning"
+    vip = "vip"
+    at_risk = "at_risk"
+    lost = "lost"
+
+
+class LoyaltyStamps(BaseModel):
+    """Current stamp progress for a customer at a merchant."""
+    current: int = 0
+    required: int = 0
+
+
+class CustomerSummary(BaseModel):
+    """Summary of a customer for the merchant customer list."""
+    consumer_id: str
+    display_name: str  # masked: "First L."
+    visit_count: int
+    last_visit: Optional[datetime] = None
+    segment: CustomerSegment
+    estimated_ltv: float
+    loyalty_stamps: Optional[LoyaltyStamps] = None
+
+
+class CustomerListResponse(BaseModel):
+    """Response for the customer list endpoint."""
+    customers: list[CustomerSummary]
+    total: int
+    segment_counts: dict[str, int]
+
+
+class VisitTimelineItem(BaseModel):
+    """A single visit in the customer detail timeline."""
+    timestamp: datetime
+    offer_name: str
+    points_earned: int
+    stamp_earned: bool = False
+
+
+class CustomerDetail(BaseModel):
+    """Full customer profile for the merchant detail view."""
+    consumer_id: str
+    display_name: str  # masked: "First L."
+    visit_count: int
+    last_visit: Optional[datetime] = None
+    first_visit: Optional[datetime] = None
+    segment: CustomerSegment
+    estimated_ltv: float
+    loyalty_stamps: Optional[LoyaltyStamps] = None
+    visit_timeline: list[VisitTimelineItem] = []
+
+
 class ConsumerRegisterRequest(BaseModel):
     """Request to register a consumer profile after Firebase Auth signup."""
     display_name: str = Field(..., min_length=1, max_length=100)
@@ -379,3 +435,81 @@ class ConsumerProfile(BaseModel):
     referral_code: str
     referred_by: Optional[str] = None
     created_at: datetime
+
+
+# --- Automated Messages / Re-engagement ---
+
+
+class AutomationTrigger(str, Enum):
+    first_visit = "first_visit"
+    at_risk = "at_risk"
+    reward_earned = "reward_earned"
+
+
+class AutomationRule(BaseModel):
+    """A single automation rule within a merchant's config."""
+    trigger: AutomationTrigger
+    enabled: bool = False
+    message_template: str = ""
+    at_risk_days: int = Field(default=14, ge=1, le=90)  # Only used for at_risk trigger
+
+
+class AutomationConfigUpdate(BaseModel):
+    """Request to update automation config for a merchant."""
+    rules: list[AutomationRule]
+
+
+class AutomationConfigResponse(BaseModel):
+    """Automation config returned from the API."""
+    merchant_id: str
+    rules: list[AutomationRule]
+
+
+class AutomatedMessageRecord(BaseModel):
+    """An automated message record (created when a message would be sent)."""
+    id: str
+    merchant_id: str
+    consumer_id: str
+    trigger: AutomationTrigger
+    channel: str = "sms"
+    message_body: str
+    sent_at: datetime
+    resulted_in_visit: bool = False
+
+
+# --- Analytics (Retention Dashboard) ---
+
+
+class RetentionCohort(BaseModel):
+    """Weekly cohort retention data for the heatmap."""
+    week_start: str  # ISO date string, e.g. "2025-01-06"
+    new_customers: int
+    retention_rates: list[float]  # Rates for weeks 1..5 (0.0-1.0)
+
+
+class RetentionResponse(BaseModel):
+    cohorts: list[RetentionCohort]
+
+
+class DealPerformance(BaseModel):
+    """Per-deal performance metrics."""
+    offer_id: str
+    offer_name: str
+    redemption_count: int
+    return_rate_14d: float  # 0.0-1.0
+    return_rate_30d: float  # 0.0-1.0
+    estimated_roi: float
+
+
+class DealPerformanceResponse(BaseModel):
+    deals: list[DealPerformance]
+
+
+class LtvBucket(BaseModel):
+    """LTV histogram bucket."""
+    bucket_label: str
+    count: int
+
+
+class LtvResponse(BaseModel):
+    buckets: list[LtvBucket]

@@ -1,3 +1,7 @@
+// ============================================================
+// Mock data for the Boost merchant dashboard
+// ============================================================
+
 export type OfferStatus = "running" | "paused" | "cap_hit" | "expired"
 
 export interface Merchant {
@@ -32,6 +36,45 @@ export interface Redemption {
   discount_text: string
   status: "success" | "failed"
 }
+
+// --- Retention / Analytics types ---
+
+export interface RetentionKPI {
+  newCustomers: number
+  newCustomersDelta: number // week-over-week change
+  returningCustomers: number
+  returningCustomersDelta: number
+  returnRate: number // 0-100
+  returnRateDelta: number
+  estLtv: number
+  estLtvDelta: number
+}
+
+export interface RetentionCohort {
+  weekStart: string
+  newCustomers: number
+  retentionRates: number[] // weeks 1-5, -1 = N/A
+}
+
+export interface DealPerformance {
+  offerId: string
+  offerName: string
+  redemptionCount: number
+  returnRate14d: number // 0-1
+  returnRate30d: number
+  estimatedRoi: number
+}
+
+export interface RecentActivity {
+  id: string
+  time: string
+  customerName: string // masked: "Sarah L."
+  offerName: string
+  visitNumber: number
+  isNew: boolean
+}
+
+// --- Existing merchant / offer data (kept for backward compat) ---
 
 export const merchant: Merchant = {
   id: "merchant-1",
@@ -180,4 +223,100 @@ export const redemptionsByDay = [
 export const methodSplit = [
   { name: "Scan", value: 78, fill: "oklch(0.72 0.15 195)" },
   { name: "Manual", value: 22, fill: "oklch(0.7 0.15 85)" },
+]
+
+// ============================================================
+// Retention-first dashboard mock data
+// ============================================================
+
+export const retentionKPI: RetentionKPI = {
+  newCustomers: 47,
+  newCustomersDelta: 12, // +12 vs last week
+  returningCustomers: 83,
+  returningCustomersDelta: 7,
+  returnRate: 64,
+  returnRateDelta: 3, // +3 percentage points
+  estLtv: 38.5,
+  estLtvDelta: 2.1,
+}
+
+export const retentionCohorts: RetentionCohort[] = [
+  {
+    weekStart: "2025-05-26",
+    newCustomers: 38,
+    retentionRates: [0.55, 0.42, 0.31, 0.26, 0.22],
+  },
+  {
+    weekStart: "2025-06-02",
+    newCustomers: 42,
+    retentionRates: [0.52, 0.38, 0.29, 0.24, -1],
+  },
+  {
+    weekStart: "2025-06-09",
+    newCustomers: 35,
+    retentionRates: [0.60, 0.45, 0.33, -1, -1],
+  },
+  {
+    weekStart: "2025-06-16",
+    newCustomers: 51,
+    retentionRates: [0.47, 0.35, -1, -1, -1],
+  },
+  {
+    weekStart: "2025-06-23",
+    newCustomers: 44,
+    retentionRates: [0.57, -1, -1, -1, -1],
+  },
+  {
+    weekStart: "2025-06-30",
+    newCustomers: 47,
+    retentionRates: [-1, -1, -1, -1, -1],
+  },
+]
+
+export const dealPerformance: DealPerformance[] = [
+  {
+    offerId: "offer-1",
+    offerName: "$2 off any coffee",
+    redemptionCount: 284,
+    returnRate14d: 0.62,
+    returnRate30d: 0.71,
+    estimatedRoi: 3.8,
+  },
+  {
+    offerId: "offer-3",
+    offerName: "10% off breakfast",
+    redemptionCount: 156,
+    returnRate14d: 0.45,
+    returnRate30d: 0.58,
+    estimatedRoi: 2.4,
+  },
+  {
+    offerId: "offer-2",
+    offerName: "Free pastry with purchase",
+    redemptionCount: 89,
+    returnRate14d: 0.38,
+    returnRate30d: 0.52,
+    estimatedRoi: 1.9,
+  },
+  {
+    offerId: "offer-4",
+    offerName: "Happy Hour BOGO",
+    redemptionCount: 67,
+    returnRate14d: 0.21,
+    returnRate30d: 0.34,
+    estimatedRoi: 1.2,
+  },
+]
+
+export const recentActivity: RecentActivity[] = [
+  { id: "a1", time: "2:34 PM", customerName: "Sarah L.", offerName: "$2 off any coffee", visitNumber: 4, isNew: false },
+  { id: "a2", time: "2:21 PM", customerName: "Mike T.", offerName: "$2 off any coffee", visitNumber: 1, isNew: true },
+  { id: "a3", time: "2:15 PM", customerName: "Aisha K.", offerName: "10% off breakfast", visitNumber: 7, isNew: false },
+  { id: "a4", time: "1:58 PM", customerName: "Jordan P.", offerName: "$2 off any coffee", visitNumber: 2, isNew: false },
+  { id: "a5", time: "1:42 PM", customerName: "Emily C.", offerName: "Free pastry with purchase", visitNumber: 1, isNew: true },
+  { id: "a6", time: "1:30 PM", customerName: "Raj M.", offerName: "$2 off any coffee", visitNumber: 5, isNew: false },
+  { id: "a7", time: "1:15 PM", customerName: "Chen W.", offerName: "10% off breakfast", visitNumber: 3, isNew: false },
+  { id: "a8", time: "12:48 PM", customerName: "Lisa B.", offerName: "$2 off any coffee", visitNumber: 1, isNew: true },
+  { id: "a9", time: "12:30 PM", customerName: "Tom R.", offerName: "Happy Hour BOGO", visitNumber: 2, isNew: false },
+  { id: "a10", time: "12:15 PM", customerName: "Nina S.", offerName: "$2 off any coffee", visitNumber: 6, isNew: false },
 ]
