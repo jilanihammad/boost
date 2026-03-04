@@ -578,6 +578,51 @@ class InsightResponse(BaseModel):
 # --- Weekly Reports ---
 
 
+# --- Merchant Invite / Onboarding ---
+
+
+class InviteStatus(str, Enum):
+    pending = "pending"
+    approved = "approved"
+    rejected = "rejected"
+
+
+class MerchantInviteRequest(BaseModel):
+    """Public request to join Boost as a merchant."""
+    business_name: str = Field(..., min_length=1, max_length=100)
+    owner_name: str = Field(..., min_length=1, max_length=100)
+    email: EmailStr
+    phone: str = Field(..., min_length=7, max_length=20)
+    category: str = Field(..., min_length=1, max_length=50)
+    zone_slug: Optional[str] = Field(None, max_length=50)
+
+
+class MerchantInvite(BaseModel):
+    """Stored invite record."""
+    id: str
+    business_name: str
+    owner_name: str
+    email: str
+    phone: str
+    category: str
+    zone_slug: Optional[str] = None
+    status: InviteStatus = InviteStatus.pending
+    created_at: datetime
+    reviewed_at: Optional[datetime] = None
+    reject_reason: Optional[str] = None
+
+
+class InviteListResponse(BaseModel):
+    """Admin view of pending invites."""
+    invites: list[MerchantInvite]
+    pending_count: int
+
+
+class InviteRejectBody(BaseModel):
+    """Optional reason when rejecting an invite."""
+    reason: Optional[str] = Field(None, max_length=500)
+
+
 class WeeklyReportSummary(BaseModel):
     """Summary of a weekly merchant report."""
     id: str
@@ -600,3 +645,41 @@ class WeeklyReportSummary(BaseModel):
 class WeeklyReportList(BaseModel):
     """List of weekly report summaries."""
     reports: list[WeeklyReportSummary]
+
+
+# --- Referrals ---
+
+
+class ReferralSubmit(BaseModel):
+    """Request body to submit a referral code."""
+    referral_code: str = Field(..., min_length=1, max_length=20)
+
+
+class ReferralRecord(BaseModel):
+    """A referral record stored in Firestore."""
+    id: str
+    referrer_id: str
+    referred_id: str
+    status: str  # "pending" | "completed"
+    points_earned: int
+    created_at: datetime
+
+
+class ReferralCodeResponse(BaseModel):
+    """Response containing the consumer's referral code."""
+    code: str
+    share_url: str
+
+
+class ReferralListItem(BaseModel):
+    """A single referral in the list response."""
+    referred_name: str  # masked, e.g. "Jane D."
+    status: str
+    points_earned: int
+    created_at: datetime
+
+
+class ReferralListResponse(BaseModel):
+    """List of referrals made by this consumer."""
+    referrals: list[ReferralListItem]
+    total_points_earned: int

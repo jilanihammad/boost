@@ -48,7 +48,8 @@ from .automations import create_automated_message
 from .customers import router as customers_router
 from .zones import router as zones_router
 from .loyalty import router as loyalty_router
-from .db import get_db, MERCHANTS, OFFERS, TOKENS, REDEMPTIONS, LEDGER, USERS, PENDING_ROLES, CONSUMERS, CONSUMER_VISITS, CONSUMER_CLAIMS, LOYALTY_CONFIGS, LOYALTY_PROGRESS, REWARDS, AUTOMATED_MESSAGES, ZONES
+from .reports import router as reports_router
+from .db import get_db, MERCHANTS, OFFERS, TOKENS, REDEMPTIONS, LEDGER, USERS, PENDING_ROLES, CONSUMERS, CONSUMER_VISITS, CONSUMER_CLAIMS, LOYALTY_CONFIGS, LOYALTY_PROGRESS, REWARDS, AUTOMATED_MESSAGES, ZONES, WEEKLY_REPORTS
 from .deps import get_current_user
 from .models import (
     MerchantCreate,
@@ -156,6 +157,9 @@ app.include_router(analytics_router, prefix="/api/v1")
 
 # --- Zones Router (public, no auth) ---
 app.include_router(zones_router, prefix="/api/v1")
+
+# --- Reports Router ---
+app.include_router(reports_router, prefix="/api/v1")
 
 
 def get_merchant_id_from_user(user: dict) -> Optional[str]:

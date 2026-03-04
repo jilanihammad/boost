@@ -270,6 +270,12 @@ export default function DashboardPage() {
               </Link>
             </Button>
             <Button variant="ghost" size="sm" asChild className="h-8 gap-1.5 text-xs text-muted-foreground hover:text-foreground">
+              <Link href="/biz/reports">
+                <Calendar className="h-4 w-4" />
+                <span className="hidden sm:inline">Reports</span>
+              </Link>
+            </Button>
+            <Button variant="ghost" size="sm" asChild className="h-8 gap-1.5 text-xs text-muted-foreground hover:text-foreground">
               <Link href="/redeem">
                 <QrCode className="h-4 w-4" />
                 <span className="hidden sm:inline">Redeem</span>
