@@ -62,4 +62,4 @@ Requires a Firebase project with Auth + Firestore enabled. See [Swagger docs](ht
 
 ## License
 
-Proprietary
+MIT License — see [LICENSE](LICENSE)
